@@ -70,4 +70,56 @@ func panelTests() {
         T.equal(f.size, PanelPlacement.size)
         T.equal(PanelPlacement.frame(screens: [main], mouse: CGPoint(x: -500, y: -500)).midX, main.midX)
     }
+    T.test("remove selects the row that took its place, else the one above") {
+        var l = PanelList(pinned: [item(9, pinned: true)], recent: [item(1), item(2), item(3)])
+        l.select(2); l.remove(2); T.equal(l.selection, 3); T.equal(l.rows.map(\.id), [9, 1, 3])
+        l.remove(3); T.equal(l.selection, 1)
+        l.remove(9); T.equal(l.selection, 1); T.equal(l.pinned.count, 0)
+        l.remove(1); T.equal(l.selection, nil)
+        var full = PanelList(pinned: [], recent: (1...50).map { item(Int64($0)) })
+        full.remove(5); T.expect(!full.isExhausted, "a local delete keeps paging alive")
+        full.markExhausted(); full.select(49); T.expect(!full.needsNextPage, "exhausted lists never page")
+    }
+
+    print("Panel text and keys")
+    T.test("relative times") {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        T.equal(PanelFormat.relative(now, now: now), "just now")
+        T.equal(PanelFormat.relative(now.addingTimeInterval(-59), now: now), "just now")
+        T.equal(PanelFormat.relative(now.addingTimeInterval(-120), now: now), "2 min ago")
+        T.equal(PanelFormat.relative(now.addingTimeInterval(-3 * 3600), now: now), "3 hr ago")
+        T.equal(PanelFormat.relative(now.addingTimeInterval(30), now: now), "just now", "clock skew")
+        T.equal(PanelFormat.relative(now.addingTimeInterval(-4 * 86400), now: now), "4 days ago")
+    }
+    T.test("type line") {
+        T.equal(PanelFormat.typeLine(kind: .link, characters: 36, byteSize: 36), "Link · 36 characters")
+        T.equal(PanelFormat.typeLine(kind: .text, characters: 1, byteSize: 1), "Text · 1 character")
+        T.equal(PanelFormat.typeLine(kind: .text, characters: 1204, byteSize: 1204, locale: Locale(identifier: "en_US")), "Text · 1,204 characters")
+        T.equal(PanelFormat.typeLine(kind: .text, characters: nil, byteSize: 9), "Text")
+        T.equal(PanelFormat.typeLine(kind: .file, characters: nil, byteSize: 9, fileCount: 3), "Files · 3 items")
+        T.equal(PanelFormat.typeLine(kind: .file, characters: nil, byteSize: 9, fileCount: 1), "File")
+        T.expect(PanelFormat.typeLine(kind: .image, characters: nil, byteSize: 1_200_000).hasPrefix("Image · "), "image size")
+    }
+    T.test("hex colors") {
+        let c = PanelFormat.hexColor("#FF375F")
+        T.equal(c?.red, 1); T.equal(c?.alpha, 1); T.equal(c.map { Int(($0.green * 255).rounded()) }, 0x37)
+        T.equal(PanelFormat.hexColor("00000080")?.alpha, Double(0x80) / 255)
+        T.expect(PanelFormat.hexColor("#XYZ123") == nil, "not hex"); T.expect(PanelFormat.hexColor("#FFF") == nil, "short form")
+    }
+    T.test("keys: arrows, return, hotkeys, pin, escape") {
+        func r(_ k: PanelKey, cmd: Bool = false, opt: Bool = false, empty: Bool = true) -> PanelCommand? {
+            PanelCommand.resolve(k, command: cmd, option: opt, queryIsEmpty: empty)
+        }
+        T.equal(r(.up), .move(-1)); T.equal(r(.down, empty: false), .move(1))
+        T.equal(r(.enter), .paste(plainText: false)); T.equal(r(.enter, opt: true), .paste(plainText: true))
+        T.equal(r(.character("3"), cmd: true), .pasteHotkey(3)); T.equal(r(.character("0"), cmd: true), nil)
+        T.equal(r(.character("p"), cmd: true), .togglePin); T.equal(r(.escape, empty: false), .escape)
+    }
+    T.test("keys: typing and ⌫ while searching belong to the search field") {
+        T.equal(PanelCommand.resolve(.character("p"), command: false, option: false, queryIsEmpty: true), nil)
+        T.equal(PanelCommand.resolve(.character("3"), command: false, option: false, queryIsEmpty: true), nil)
+        T.equal(PanelCommand.resolve(.backspace, command: false, option: false, queryIsEmpty: false), nil)
+        T.equal(PanelCommand.resolve(.backspace, command: false, option: false, queryIsEmpty: true), .delete)
+        T.equal(PanelCommand.resolve(.backspace, command: false, option: true, queryIsEmpty: true), nil)
+    }
 }

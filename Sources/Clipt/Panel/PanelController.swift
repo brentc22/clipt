@@ -17,6 +17,9 @@ final class PanelController: ObservableObject {
     private(set) var pasteTarget: NSRunningApplication?
 
     private var panel: PanelWindow?
+    let model = PanelModel()
+    /// Clear room around the glass for its shadow; the panel itself stays `PanelPlacement.size`.
+    static let shadowMargin: CGFloat = 40
     private let hotKeys = HotKeys()
     private var observers: [NSObjectProtocol] = []
 
@@ -26,10 +29,20 @@ final class PanelController: ObservableObject {
     func start() {
         guard panel == nil else { return }
         let panel = PanelWindow()
-        panel.onCancel = { [weak self] in self?.hide(animated: false) }
-        let host = NSHostingView(rootView: PanelPlaceholder())
-        host.frame = CGRect(origin: .zero, size: PanelPlacement.size)
-        panel.contentView = host
+        panel.onCancel = { [weak self] in
+            guard let self else { return }
+            if self.model.escape() { self.hide(animated: false) }
+        }
+        model.pasteTarget = { [weak self] in self?.pasteTarget }
+        model.close = { [weak self] in self?.hide(animated: false) }
+        let m = Self.shadowMargin
+        let container = NSView(frame: CGRect(origin: .zero, size: CGSize(width: PanelPlacement.size.width + 2 * m,
+                                                                         height: PanelPlacement.size.height + 2 * m)))
+        let host = NSHostingView(rootView: PanelView(model: model))
+        host.frame = CGRect(origin: CGPoint(x: m, y: m), size: PanelPlacement.size)
+        container.addSubview(host)
+        panel.contentView = container
+        panel.setContentSize(container.frame.size)
         host.layoutSubtreeIfNeeded()
         panel.displayIfNeeded()
         self.panel = panel
@@ -80,25 +93,17 @@ final class PanelController: ObservableObject {
         let front = NSWorkspace.shared.frontmostApplication
         pasteTarget = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
         let screens = NSScreen.screens.map(\.visibleFrame)
-        panel.setFrame(PanelPlacement.frame(screens: screens, mouse: NSEvent.mouseLocation), display: false)
+        let frame = PanelPlacement.frame(screens: screens, mouse: NSEvent.mouseLocation)
+        panel.setFrame(frame.insetBy(dx: -Self.shadowMargin, dy: -Self.shadowMargin), display: false)
+        model.willShow()
         panel.makeKeyAndOrderFront(nil)
-        // Task 7: reset search and selection here.
     }
 
     func hide(animated: Bool) {
-        // Task 7 reads pasteTarget before calling hide when pasting.
+        // Callers that paste read pasteTarget first: it is cleared here.
         guard let panel, panel.isVisible else { return }
         pasteTarget = nil
         panel.orderOut(nil)
-    }
-}
-
-/// Stands in until Task 7 supplies the real list.
-private struct PanelPlaceholder: View {
-    var body: some View {
-        Text("Clipt")
-            .font(.title)
-            .frame(width: PanelPlacement.size.width, height: PanelPlacement.size.height)
-            .glassEffect(in: .rect(cornerRadius: 22))
+        model.didHide()
     }
 }

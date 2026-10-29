@@ -53,6 +53,21 @@ public struct PanelList: Equatable, Sendable {
         if more.count < Self.pageSize { isExhausted = true }
     }
 
+    /// Drops a row in place (a delete, before the store confirms it). A removed selection
+    /// moves to the row that took its place, else the one above; paging state is kept.
+    public mutating func remove(_ id: Int64) {
+        let rows = rows
+        guard let index = rows.firstIndex(where: { $0.id == id }) else { return }
+        pinned.removeAll { $0.id == id }
+        recent.removeAll { $0.id == id }
+        guard selection == id else { return }
+        let after = self.rows
+        selection = after.isEmpty ? nil : after[min(index, after.count - 1)].id
+    }
+
+    /// No further pages, e.g. for search results, which arrive in one piece.
+    public mutating func markExhausted() { isExhausted = true }
+
     /// 1…9 is the position among the visible recent rows; pins never get a number.
     public func hotkeyNumber(for id: Int64) -> Int? {
         guard let i = recent.prefix(9).firstIndex(where: { $0.id == id }) else { return nil }
