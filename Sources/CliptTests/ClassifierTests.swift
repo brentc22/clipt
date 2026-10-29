@@ -42,4 +42,24 @@ func classifierTests() {
         T.equal(ClipClassifier.content(from: .init(representations: [png]))?.kind, .image)
         T.equal(ClipClassifier.content(from: snap([(PasteType.fileURL, "file:///Users/x/a.pdf")]))?.kind, .file)
     }
+    T.test("same filename in different folders hashes differently") {
+        let a = ClipClassifier.content(from: snap([(PasteType.plainText, "a.pdf"), (PasteType.fileURL, "file:///Users/x/one/a.pdf")]))!
+        let b = ClipClassifier.content(from: snap([(PasteType.plainText, "a.pdf"), (PasteType.fileURL, "file:///Users/x/two/a.pdf")]))!
+        T.equal(a.kind, .file)
+        T.expect(a.primaryHash != b.primaryHash, "file URLs differ")
+    }
+    T.test("file preview lists file names") {
+        let c = ClipClassifier.content(from: .init(representations: [
+            .init(type: PasteType.fileURL, data: Data("file:///Users/x/a.pdf".utf8)),
+            .init(type: PasteType.fileURL, data: Data("file:///Users/x/My%20Doc.txt".utf8))]))!
+        T.equal(c.preview, "a.pdf, My Doc.txt")
+    }
+    T.test("image hash follows the image data") {
+        let p1 = Representation(type: PasteType.png, data: Data([1, 2, 3]))
+        let p2 = Representation(type: PasteType.png, data: Data([1, 2, 4]))
+        let a = ClipClassifier.content(from: .init(representations: [.init(type: PasteType.plainText, data: Data("same".utf8)), p1]))!
+        let b = ClipClassifier.content(from: .init(representations: [.init(type: PasteType.plainText, data: Data("same".utf8)), p2]))!
+        T.equal(a.kind, .image)
+        T.expect(a.primaryHash != b.primaryHash, "image data differs")
+    }
 }

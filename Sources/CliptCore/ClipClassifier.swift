@@ -31,21 +31,17 @@ public enum ClipClassifier {
             return nil
         }
 
-        // Primary representation: plain text, then image, then file URLs.
-        if let text {
-            primary = Data(text.utf8)
-        } else if let image {
-            primary = image.data
-        } else {
+        // The primary representation follows the kind.
+        switch kind {
+        case .file:
             primary = Data(fileURLs.joined(separator: "\n").utf8)
-        }
-
-        if let text {
-            preview = collapse(text)
-        } else if kind == .file {
-            preview = collapse(fileURLs.joined(separator: " "))
-        } else {
-            preview = "Image"
+            preview = collapse(fileURLs.map(fileName).joined(separator: ", "))
+        case .image:
+            primary = image!.data
+            preview = text.map(collapse) ?? "Image"
+        default:
+            primary = Data(text!.utf8)
+            preview = collapse(text!)
         }
 
         let hash = SHA256.hash(data: primary).map { String(format: "%02x", $0) }.joined()
@@ -68,6 +64,11 @@ public enum ClipClassifier {
               scheme == "http" || scheme == "https",
               let host = url.host, !host.isEmpty else { return false }
         return true
+    }
+
+    private static func fileName(_ s: String) -> String {
+        if let url = URL(string: s), url.isFileURL { return url.lastPathComponent }
+        return (s as NSString).lastPathComponent
     }
 
     private static func collapse(_ s: String) -> String {
