@@ -49,6 +49,7 @@ public final class ClipStore {
         try fm.createDirectory(at: blobsDir, withIntermediateDirectories: true)
         try fm.createDirectory(at: thumbsDir, withIntermediateDirectories: true)
         let path = directory.appendingPathComponent("clipt.sqlite").path
+        var recovered = false
         do {
             db = try Self.open(path)
         } catch let e as SQLiteError where e.code == SQLITE_NOTADB || e.code == SQLITE_CORRUPT {
@@ -60,8 +61,10 @@ public final class ClipStore {
                 try fm.moveItem(atPath: from, toPath: to)
             }
             db = try Self.open(path)
+            recovered = true
         }
-        try sweepOrphans()
+        // After recovery the blobs belong to the kept-aside database; never sweep them.
+        if !recovered { try sweepOrphans() }
     }
 
     /// Deletes files in blobs/ and thumbs/ that no row references.

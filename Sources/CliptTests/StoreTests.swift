@@ -76,8 +76,12 @@ func storeTests() {
     }
     T.test("a corrupt database is moved aside, not fatal") {
         let d = tmp(); try Data("not a database".utf8).write(to: d.appendingPathComponent("clipt.sqlite"))
+        let keep = d.appendingPathComponent("blobs/keepme")
+        try FileManager.default.createDirectory(at: keep.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: keep)
         let s = try ClipStore(directory: d); T.equal(try s.count(), 0)
         T.expect(try FileManager.default.contentsOfDirectory(atPath: d.path).contains { $0.hasPrefix("clipt.sqlite.corrupt-") }, "kept aside")
+        T.expect(FileManager.default.fileExists(atPath: keep.path), "blobs untouched after recovery")
     }
     T.test("odd queries never throw; empty query equals pinned + recent") {
         let s = try ClipStore(directory: tmp())
