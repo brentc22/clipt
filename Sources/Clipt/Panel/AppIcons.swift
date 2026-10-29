@@ -31,26 +31,31 @@ enum AppIcons {
     }
 }
 
-/// Row-sized thumbnails decoded from the stored 256 px PNGs. Downsampled to what a row
-/// draws (about 6 KB each), and dropped when the panel closes.
+/// Thumbnails decoded from the stored 256 px PNGs, keyed by file and size. Decoding
+/// happens off the main thread; the main thread only ever reads the memory cache.
+/// Bounded by bytes: row-sized entries are about 16 KB, so this holds a few hundred.
 @MainActor
 enum Thumbnails {
-    private static let cache: NSCache<NSURL, NSImage> = {
-        let c = NSCache<NSURL, NSImage>()
-        c.countLimit = 120
+    private static let cache: NSCache<NSString, NSImage> = {
+        let c = NSCache<NSString, NSImage>()
+        c.totalCostLimit = 4 * 1_048_576
         return c
     }()
 
-    /// `maxPixel` is the longest side in pixels.
-    static func image(at url: URL, maxPixel: Int = 64) -> NSImage? {
-        if let hit = cache.object(forKey: url as NSURL) { return hit }
-        guard let cg = downsample(url, maxPixel: maxPixel) else { return nil }
+    private static func key(_ url: URL, _ maxPixel: Int) -> NSString { "\(maxPixel)|\(url.path)" as NSString }
+
+    /// Memory only, never the disk.
+    static func cached(_ url: URL, maxPixel: Int) -> NSImage? { cache.object(forKey: key(url, maxPixel)) }
+
+    /// Decodes off main on a miss. Point size is half the pixel size (Retina).
+    static func load(_ url: URL, maxPixel: Int) async -> NSImage? {
+        if let hit = cached(url, maxPixel: maxPixel) { return hit }
+        guard let cg = await Task.detached(priority: .userInitiated, operation: { downsample(url, maxPixel: maxPixel) }).value
+        else { return nil }
         let image = NSImage(cgImage: cg, size: NSSize(width: cg.width / 2, height: cg.height / 2))
-        cache.setObject(image, forKey: url as NSURL)
+        cache.setObject(image, forKey: key(url, maxPixel), cost: cg.width * cg.height * 4)
         return image
     }
-
-    static func removeAll() { cache.removeAllObjects() }
 
     nonisolated static func downsample(_ url: URL, maxPixel: Int) -> CGImage? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }

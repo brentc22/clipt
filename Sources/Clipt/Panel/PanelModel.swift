@@ -2,22 +2,6 @@ import AppKit
 import Combine
 import CliptCore
 
-/// What the preview pane shows for the selected item.
-enum PreviewContent {
-    /// At most `PanelFormat.previewCharacterLimit` characters.
-    case text(String)
-    case image(NSImage)
-    case files([URL])
-    case color(NSColor, String)
-}
-
-/// The From / Copied / Type grid under the preview.
-struct PreviewMeta: Equatable {
-    let source: String
-    let copiedAt: Date
-    let type: String
-}
-
 /// The panel's state. Data comes from `History`; the view only reads this and calls methods.
 @MainActor
 final class PanelModel: ObservableObject {
@@ -45,13 +29,20 @@ final class PanelModel: ObservableObject {
     private var debounceTask: Task<Void, Never>?
     private var reloadTask: Task<Void, Never>?
     private var pageTask: Task<Void, Never>?
-    private var previewTask: Task<Void, Never>?
     /// Every reload bumps it; results from an older one are dropped.
     private var generation = 0
-    private var previewedID: Int64?
+    private let previewLoader = PreviewLoader()
     /// A reset that has not landed yet. A later reload (say, a copy arriving just after
     /// show) supersedes the task but must not drop the reset.
     private var resetPending = false
+    /// What the list on screen was loaded for. A load for anything else always resets.
+    private var loadedQuery: String?
+    private var loadedFilter: KindFilter?
+    /// A query/filter change is waiting out its debounce.
+    private var reloadDue = false
+    /// Bumped on every show and hide, so a paste that waited for results can tell the panel closed meanwhile.
+    private var session = 0
+    private var pastePending = false
     private var cancellables: Set<AnyCancellable> = []
 
     init() {
@@ -76,6 +67,8 @@ final class PanelModel: ObservableObject {
 
     /// Synchronous and cheap: the panel goes on screen in the same turn, the data follows.
     func willShow() {
+        session += 1
+        pastePending = false
         debounceTask?.cancel()
         // Assigning the same value does not schedule a reload (didSet compares).
         query = ""
@@ -86,24 +79,27 @@ final class PanelModel: ObservableObject {
         reload(resetSelection: true)
     }
 
-    /// Let go of everything that grows while browsing: deep pages, the preview image, thumbnails.
+    /// Let go of everything that grows while browsing: deep pages and the preview image.
+    /// Row thumbnails stay in their byte-bounded cache, so they don't flicker on the next open.
     func didHide() {
+        session += 1
+        reloadDue = false
         debounceTask?.cancel()
+        reloadTask?.cancel(); reloadTask = nil
         pageTask?.cancel(); pageTask = nil
-        previewTask?.cancel(); previewTask = nil
+        previewLoader.cancel()
         generation += 1
         preview = nil
         meta = nil
-        previewedID = nil
         if list.recent.count > PanelList.pageSize {
             list.replace(pinned: list.pinned, recent: Array(list.recent.prefix(PanelList.pageSize)), resetSelection: true)
         }
-        Thumbnails.removeAll()
     }
 
     // MARK: Loading
 
     private func scheduleReload() {
+        reloadDue = true
         debounceTask?.cancel()
         debounceTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(60))
@@ -113,15 +109,17 @@ final class PanelModel: ObservableObject {
     }
 
     func reload(resetSelection: Bool) {
+        reloadDue = false
         debounceTask?.cancel()
         reloadTask?.cancel()
         pageTask?.cancel(); pageTask = nil
         generation += 1
         let gen = generation
-        let reset = resetSelection || resetPending
-        resetPending = reset
         let q = trimmedQuery
         let f = filter
+        // A revision reload that supersedes a debounced one still carries its reset.
+        let reset = resetSelection || resetPending || q != loadedQuery || f != loadedFilter
+        resetPending = reset
         // Keep what was paged in, so a background change never yanks a deep selection to the top.
         let limit = reset ? PanelList.pageSize : max(PanelList.pageSize, list.recent.count)
         reloadTask = Task { [weak self] in
@@ -138,13 +136,33 @@ final class PanelModel: ObservableObject {
             next.replace(pinned: pinned, recent: recent, resetSelection: reset)
             self.resetPending = false
             if !q.isEmpty { next.markExhausted() }   // search results come in one piece
+            self.loadedQuery = q
+            self.loadedFilter = f
+            self.reloadTask = nil
             self.list = next
             self.hasLoaded = true
         }
     }
 
+    /// Waits until the list on screen matches the query and filter as typed: a debounce
+    /// still waiting is run now, and any reload in flight is awaited.
+    private func settle() async {
+        if reloadDue { reload(resetSelection: true) }
+        while let task = reloadTask {
+            await task.value
+            if reloadTask == task { break }   // ended without landing (hidden); nothing newer is coming
+        }
+    }
+
+    private var isSettled: Bool { !reloadDue && reloadTask == nil }
+
     private func listDidChange() {
-        if list.selection != previewedID { loadPreview() }
+        if list.selection != previewLoader.itemID {
+            previewLoader.load(selectedItem) { [weak self] content, meta in
+                self?.preview = content
+                self?.meta = meta
+            }
+        }
         if list.needsNextPage { loadNextPage() }
     }
 
@@ -161,85 +179,36 @@ final class PanelModel: ObservableObject {
         }
     }
 
-    // MARK: Preview
-
-    private func loadPreview() {
-        previewTask?.cancel()
-        previewTask = nil
-        guard let item = selectedItem else {
-            previewedID = nil; preview = nil; meta = nil
-            return
-        }
-        previewedID = item.id
-        // Something right away from what the row already has; the full content follows.
-        let source = item.sourceAppName ?? "Unknown app"
-        func setMeta(characters: Int? = nil, files: Int? = nil) {
-            meta = PreviewMeta(source: source, copiedAt: item.copiedAt,
-                               type: PanelFormat.typeLine(kind: item.kind, characters: characters,
-                                                          byteSize: item.byteSize, fileCount: files))
-        }
-        setMeta()
-        let id = item.id
-        switch item.kind {
-        case .text, .link:
-            preview = .text(item.preview)
-            previewTask = Task { [weak self] in
-                guard let full = await History.shared.fullText(of: id) else { return }
-                // Counting a multi-megabyte string is not main-thread work.
-                let (shown, count) = await Task.detached(priority: .userInitiated) {
-                    (String(full.prefix(PanelFormat.previewCharacterLimit)), full.count)
-                }.value
-                guard let self, !Task.isCancelled, self.previewedID == id else { return }
-                self.preview = .text(shown)
-                setMeta(characters: count)
-            }
-        case .color:
-            let hex = item.preview.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let c = PanelFormat.hexColor(hex) {
-                preview = .color(NSColor(srgbRed: c.red, green: c.green, blue: c.blue, alpha: c.alpha), hex)
-            } else {
-                preview = .text(hex)
-            }
-        case .image:
-            preview = item.thumbnailURL.flatMap { Thumbnails.image(at: $0, maxPixel: 256) }.map(PreviewContent.image)
-            previewTask = Task { [weak self] in
-                // Only once the selection rests: holding ↓ over images must not queue big reads.
-                try? await Task.sleep(for: .milliseconds(120))
-                guard !Task.isCancelled else { return }
-                let reps = await History.shared.representations(of: id)
-                guard !Task.isCancelled,
-                      let data = (reps.first { $0.type == PasteType.png } ?? reps.first { $0.type == PasteType.tiff })?.data
-                else { return }
-                let cg = await Task.detached(priority: .userInitiated) { Thumbnails.downsample(data, maxPixel: 900) }.value
-                guard let self, let cg, !Task.isCancelled, self.previewedID == id else { return }
-                self.preview = .image(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)))
-            }
-        case .file:
-            preview = .files([])
-            previewTask = Task { [weak self] in
-                let reps = await History.shared.representations(of: id)
-                let urls = reps.filter { $0.type == PasteType.fileURL }
-                    .compactMap { String(data: $0.data, encoding: .utf8).flatMap(URL.init(string:)) }
-                guard let self, !Task.isCancelled, self.previewedID == id else { return }
-                self.preview = .files(urls)
-                setMeta(files: urls.count)
-            }
-        }
-    }
-
     // MARK: Actions
 
     func move(by delta: Int) { list.moveSelection(by: delta) }
     func select(_ id: Int64) { list.select(id) }
 
+    /// ↩ right after typing must paste from the results for what was typed, not from the
+    /// list still on screen: resolve the row only once the list has caught up.
     func pasteSelected(plainText: Bool) {
-        guard let id = list.selection else { return }
-        paste(id: id, plainText: plainText)
+        whenSettled { $0.list.selection.map { ($0, plainText) } }
     }
 
+    /// ⌘N likewise pastes the row showing ⌘N in the settled list.
     func paste(hotkey n: Int) {
-        guard let item = list.item(forHotkey: n) else { return }
-        paste(id: item.id, plainText: false)
+        whenSettled { $0.list.item(forHotkey: n).map { ($0.id, false) } }
+    }
+
+    private func whenSettled(_ pick: @escaping (PanelModel) -> (Int64, Bool)?) {
+        guard !pastePending else { return }
+        if isSettled {
+            if let (id, plain) = pick(self) { paste(id: id, plainText: plain) }
+            return
+        }
+        pastePending = true
+        let mine = session
+        Task { [weak self] in
+            await self?.settle()
+            guard let self, self.session == mine else { return }   // closed while waiting
+            self.pastePending = false
+            if let (id, plain) = pick(self) { self.paste(id: id, plainText: plain) }
+        }
     }
 
     /// Target first: hiding clears it.

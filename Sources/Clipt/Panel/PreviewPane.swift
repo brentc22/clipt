@@ -106,3 +106,114 @@ private struct MetaGrid: View {
         }
     }
 }
+
+// MARK: - Content and loading
+
+/// What the preview pane shows for the selected item.
+enum PreviewContent {
+    /// At most `PanelFormat.previewCharacterLimit` characters.
+    case text(String)
+    case image(NSImage)
+    case files([URL])
+    case color(NSColor, String)
+}
+
+/// The From / Copied / Type grid under the preview.
+struct PreviewMeta: Equatable {
+    let source: String
+    let copiedAt: Date
+    let type: String
+}
+
+/// Loads the preview for one item at a time; a newer `load` or `cancel` drops older results.
+/// Nothing here touches the disk on the main thread: the show path runs through it.
+@MainActor
+final class PreviewLoader {
+    typealias Apply = @MainActor (PreviewContent?, PreviewMeta?) -> Void
+
+    private(set) var itemID: Int64?
+    private var task: Task<Void, Never>?
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+        itemID = nil
+    }
+
+    /// Calls `apply` at once with what the row already has, then again as fuller content arrives.
+    func load(_ item: ClipItem?, apply: @escaping Apply) {
+        cancel()
+        guard let item else { return apply(nil, nil) }
+        itemID = item.id
+        let id = item.id
+        var content: PreviewContent?
+        var meta = Self.meta(item)
+        let isCurrent = { [weak self] in !Task.isCancelled && self?.itemID == id }
+
+        switch item.kind {
+        case .text, .link:
+            content = .text(item.preview)
+            task = Task {
+                guard let full = await History.shared.fullText(of: id) else { return }
+                // Counting a multi-megabyte string is not main-thread work.
+                let (shown, count) = await Task.detached(priority: .userInitiated) {
+                    (String(full.prefix(PanelFormat.previewCharacterLimit)), full.count)
+                }.value
+                guard isCurrent() else { return }
+                content = .text(shown)
+                meta = Self.meta(item, characters: count)
+                apply(content, meta)
+            }
+        case .color:
+            let hex = item.preview.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let c = PanelFormat.hexColor(hex) {
+                content = .color(NSColor(srgbRed: c.red, green: c.green, blue: c.blue, alpha: c.alpha), hex)
+            } else {
+                content = .text(hex)
+            }
+        case .image:
+            let thumbURL = item.thumbnailURL
+            task = Task {
+                // The stored thumbnail first, decoded off main.
+                if let thumbURL {
+                    let cg = await Task.detached(priority: .userInitiated) { Thumbnails.downsample(thumbURL, maxPixel: 256) }.value
+                    guard isCurrent() else { return }
+                    if let cg { content = .image(Self.image(cg)); apply(content, meta) }
+                }
+                // The full image only once the selection rests: holding ↓ over images must not queue big reads.
+                try? await Task.sleep(for: .milliseconds(120))
+                guard isCurrent() else { return }
+                let reps = await History.shared.representations(of: id)
+                guard isCurrent(),
+                      let data = (reps.first { $0.type == PasteType.png } ?? reps.first { $0.type == PasteType.tiff })?.data
+                else { return }
+                let cg = await Task.detached(priority: .userInitiated) { Thumbnails.downsample(data, maxPixel: 900) }.value
+                guard isCurrent(), let cg else { return }
+                content = .image(Self.image(cg))
+                apply(content, meta)
+            }
+        case .file:
+            content = .files([])
+            task = Task {
+                let reps = await History.shared.representations(of: id)
+                let urls = reps.filter { $0.type == PasteType.fileURL }
+                    .compactMap { String(data: $0.data, encoding: .utf8).flatMap(URL.init(string:)) }
+                guard isCurrent() else { return }
+                content = .files(urls)
+                meta = Self.meta(item, files: urls.count)
+                apply(content, meta)
+            }
+        }
+        apply(content, meta)
+    }
+
+    private static func meta(_ item: ClipItem, characters: Int? = nil, files: Int? = nil) -> PreviewMeta {
+        PreviewMeta(source: item.sourceAppName ?? "Unknown app", copiedAt: item.copiedAt,
+                    type: PanelFormat.typeLine(kind: item.kind, characters: characters,
+                                               byteSize: item.byteSize, fileCount: files))
+    }
+
+    private static func image(_ cg: CGImage) -> NSImage {
+        NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+}

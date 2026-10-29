@@ -32,15 +32,7 @@ struct ClipRow: View, Equatable {
         switch item.kind {
         case .image:
             HStack(spacing: 8) {
-                if let url = item.thumbnailURL, let thumb = Thumbnails.image(at: url) {
-                    // Height fixed, width follows the image (capped), so the label sits right after it.
-                    Image(nsImage: thumb)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: min(56, 20 * thumb.size.width / max(thumb.size.height, 1)), height: 20)
-                        .clipShape(.rect(cornerRadius: 3))
-                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.primary.opacity(0.12), lineWidth: 0.5))
-                }
+                if let url = item.thumbnailURL { RowThumbnail(url: url) }
                 Text(item.preview)
                     .font(.system(size: 13))
                     .foregroundStyle(selected ? Color.white.opacity(0.8) : Color.secondary)
@@ -78,6 +70,38 @@ struct ClipRow: View, Equatable {
             Text("⌘\(hotkey)")
                 .font(.system(size: 11).monospacedDigit())
                 .opacity(selected ? 0.85 : 0.45)
+        }
+    }
+}
+
+/// A 20 pt-tall thumbnail whose width follows the image (capped), loaded off main.
+private struct RowThumbnail: View {
+    let url: URL
+    // `State` as a plain property: the `@State` macro's plugin is missing from the Command Line Tools toolchain.
+    private let loaded: State<NSImage?>
+    private var image: NSImage? { loaded.wrappedValue }
+    private static let maxPixel = 112   // 56 pt wide at 2x
+
+    init(url: URL) {
+        self.url = url
+        loaded = State(initialValue: Thumbnails.cached(url, maxPixel: Self.maxPixel))
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: min(56, 20 * image.size.width / max(image.size.height, 1)), height: 20)
+            } else {
+                Color.primary.opacity(0.06).frame(width: 30, height: 20)
+            }
+        }
+        .clipShape(.rect(cornerRadius: 3))
+        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.primary.opacity(0.12), lineWidth: 0.5))
+        .task(id: url) {
+            if image == nil { loaded.wrappedValue = await Thumbnails.load(url, maxPixel: Self.maxPixel) }
         }
     }
 }

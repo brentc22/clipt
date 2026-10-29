@@ -94,11 +94,24 @@ func panelTests() {
     T.test("type line") {
         T.equal(PanelFormat.typeLine(kind: .link, characters: 36, byteSize: 36), "Link · 36 characters")
         T.equal(PanelFormat.typeLine(kind: .text, characters: 1, byteSize: 1), "Text · 1 character")
-        T.equal(PanelFormat.typeLine(kind: .text, characters: 1204, byteSize: 1204, locale: Locale(identifier: "en_US")), "Text · 1,204 characters")
+        T.equal(PanelFormat.typeLine(kind: .text, characters: 1204, byteSize: 1204), "Text · 1,204 characters")
         T.equal(PanelFormat.typeLine(kind: .text, characters: nil, byteSize: 9), "Text")
         T.equal(PanelFormat.typeLine(kind: .file, characters: nil, byteSize: 9, fileCount: 3), "Files · 3 items")
         T.equal(PanelFormat.typeLine(kind: .file, characters: nil, byteSize: 9, fileCount: 1), "File")
-        T.expect(PanelFormat.typeLine(kind: .image, characters: nil, byteSize: 1_200_000).hasPrefix("Image · "), "image size")
+        T.equal(PanelFormat.typeLine(kind: .image, characters: nil, byteSize: 1_800_000), "Image · 1.8 MB")
+    }
+    T.test("UI numbers and dates stay English under a Dutch locale") {
+        // This Mac runs nl_BE (it printed "1.204" and "1,8 MB" before the fix); pin a
+        // Dutch calendar too so the test means the same on any machine.
+        var nl = Calendar(identifier: .gregorian)
+        nl.locale = Locale(identifier: "nl_BE")
+        nl.timeZone = TimeZone(identifier: "UTC")!
+        T.equal(PanelFormat.typeLine(kind: .image, characters: nil, byteSize: 1_800_000), "Image · 1.8 MB")
+        T.equal(PanelFormat.typeLine(kind: .text, characters: 1204, byteSize: 1), "Text · 1,204 characters")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)   // 15 Jan 2027
+        let old = now.addingTimeInterval(-10 * 86400)           // 5 Jan 2027
+        T.equal(PanelFormat.relative(old, now: now, calendar: nl), "Jan 5")
+        T.equal(PanelFormat.relative(old.addingTimeInterval(-400 * 86400), now: now, calendar: nl), "Dec 1, 2025")
     }
     T.test("hex colors") {
         let c = PanelFormat.hexColor("#FF375F")
@@ -114,6 +127,29 @@ func panelTests() {
         T.equal(r(.enter), .paste(plainText: false)); T.equal(r(.enter, opt: true), .paste(plainText: true))
         T.equal(r(.character("3"), cmd: true), .pasteHotkey(3)); T.equal(r(.character("0"), cmd: true), nil)
         T.equal(r(.character("p"), cmd: true), .togglePin); T.equal(r(.escape, empty: false), .escape)
+    }
+    T.test("keys: ⌘1–⌘9 follow the physical number row (AZERTY)") {
+        func r(_ c: Character, _ code: UInt16) -> PanelCommand? {
+            PanelCommand.resolve(.character(c), command: true, option: false, queryIsEmpty: true, keyCode: code)
+        }
+        // kVK_ANSI_1…9 = 18 19 20 21 23 22 26 28 25; AZERTY types & é " ' ( § è ! ç there.
+        let codes: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+        let azerty: [Character] = ["&", "é", "\"", "'", "(", "§", "è", "!", "ç"]
+        for (i, code) in codes.enumerated() { T.equal(r(azerty[i], code), .pasteHotkey(i + 1), "key \(code)") }
+        T.equal(r("0", 29), nil, "⌘0 is not a hotkey")
+        T.equal(r("1", 83), nil, "keypad 1 is not the number row")
+        T.equal(r("p", 35), .togglePin, "⌘P by character")
+        T.equal(PanelCommand.resolve(.character("&"), command: true, option: false, queryIsEmpty: true), nil)
+    }
+    T.test("keys: auto-repeat only moves") {
+        func r(_ k: PanelKey, cmd: Bool = false, empty: Bool = true, code: UInt16? = nil) -> PanelCommand? {
+            PanelCommand.resolve(k, command: cmd, option: false, queryIsEmpty: empty, keyCode: code, isRepeat: true)
+        }
+        T.equal(r(.down), .move(1)); T.equal(r(.up), .move(-1))
+        T.equal(r(.backspace), nil, "held ⌫ must not delete history once the field is empty")
+        T.equal(r(.enter), nil, "held ↩ must not paste twice")
+        T.equal(r(.character("&"), cmd: true, code: 18), nil, "held ⌘1 must not paste twice")
+        T.equal(r(.character("p"), cmd: true), nil); T.equal(r(.escape), nil)
     }
     T.test("keys: typing and ⌫ while searching belong to the search field") {
         T.equal(PanelCommand.resolve(.character("p"), command: false, option: false, queryIsEmpty: true), nil)

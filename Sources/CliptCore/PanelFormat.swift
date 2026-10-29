@@ -4,9 +4,13 @@ import Foundation
 public enum PanelFormat {
     /// The preview pane shows at most this many characters of a text.
     public static let previewCharacterLimit = 20_000
+    /// All UI text is English, so dates, sizes and numbers are too, whatever the system locale.
+    public static let locale = Locale(identifier: "en_US")
 
     /// "just now", "2 min ago", "3 hr ago", "yesterday", "4 days ago", then a short date.
     public static func relative(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        var calendar = calendar
+        calendar.locale = locale
         let seconds = max(0, now.timeIntervalSince(date))
         if seconds < 60 { return "just now" }
         let minutes = Int(seconds / 60)
@@ -18,31 +22,31 @@ public enum PanelFormat {
         if days <= 1 { return "yesterday" }
         if days < 7 { return "\(days) days ago" }
         let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-        let style = Date.FormatStyle(date: .abbreviated, time: .omitted)
-        return sameYear ? date.formatted(.dateTime.day().month(.abbreviated)) : date.formatted(style)
+        let base = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        return sameYear ? date.formatted(base.day().month(.abbreviated))
+                        : date.formatted(base.day().month(.abbreviated).year())
     }
 
     /// The "Type" line: "Link · 36 characters", "Image · 1.2 MB", "Files · 3 items".
     /// `characters` is nil while the full text is still loading.
-    public static func typeLine(kind: ClipKind, characters: Int?, byteSize: Int, fileCount: Int? = nil,
-                                locale: Locale = .current) -> String {
+    public static func typeLine(kind: ClipKind, characters: Int?, byteSize: Int, fileCount: Int? = nil) -> String {
         switch kind {
         case .text, .link:
             let name = kind == .link ? "Link" : "Text"
             guard let characters else { return name }
-            return "\(name) · \(count(characters, "character", locale))"
+            return "\(name) · \(count(characters, "character"))"
         case .color:
             return "Color"
         case .image:
-            return "Image · " + ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file)
+            return "Image · " + Int64(byteSize).formatted(.byteCount(style: .file).locale(locale))
         case .file:
             guard let fileCount, fileCount != 1 else { return "File" }
-            return "Files · \(count(fileCount, "item", locale))"
+            return "Files · \(count(fileCount, "item"))"
         }
     }
 
     /// "1 character", "1,204 characters".
-    static func count(_ n: Int, _ noun: String, _ locale: Locale) -> String {
+    static func count(_ n: Int, _ noun: String) -> String {
         "\(n.formatted(.number.grouping(.automatic).locale(locale))) \(noun)\(n == 1 ? "" : "s")"
     }
 
@@ -72,8 +76,36 @@ public enum PanelCommand: Equatable, Sendable {
     case delete
     case escape
 
+    /// Physical number-row keys (kVK_ANSI_1…9), so ⌘1–⌘9 work on AZERTY, where the
+    /// unshifted keys type & é " ' ( § è ! ç.
+    public static func hotkeyNumber(keyCode: UInt16) -> Int? {
+        switch keyCode {
+        case 18: 1
+        case 19: 2
+        case 20: 3
+        case 21: 4
+        case 23: 5
+        case 22: 6
+        case 26: 7
+        case 28: 8
+        case 25: 9
+        default: nil
+        }
+    }
+
     /// Nil means the key is not the panel's: the search field gets it (typing, ⌫ while searching).
-    public static func resolve(_ key: PanelKey, command: Bool, option: Bool, queryIsEmpty: Bool) -> PanelCommand? {
+    /// `keyCode` is the physical key when known. Auto-repeat only moves the selection: a held
+    /// ⌫ must stop at an empty field instead of deleting history, and a held ↩ or ⌘N must not
+    /// paste twice.
+    public static func resolve(_ key: PanelKey, command: Bool, option: Bool, queryIsEmpty: Bool,
+                               keyCode: UInt16? = nil, isRepeat: Bool = false) -> PanelCommand? {
+        if isRepeat {
+            switch key {
+            case .up: return .move(-1)
+            case .down: return .move(1)
+            default: return nil
+            }
+        }
         switch key {
         case .up: return .move(-1)
         case .down: return .move(1)
@@ -82,7 +114,11 @@ public enum PanelCommand: Equatable, Sendable {
         case .backspace: return queryIsEmpty && !command && !option ? .delete : nil
         case .character(let c):
             guard command else { return nil }
-            if let n = c.wholeNumberValue, (1...9).contains(n) { return .pasteHotkey(n) }
+            if let keyCode {
+                if let n = hotkeyNumber(keyCode: keyCode) { return .pasteHotkey(n) }
+            } else if let n = c.wholeNumberValue, (1...9).contains(n) {
+                return .pasteHotkey(n)
+            }
             if c == "p" || c == "P" { return .togglePin }
             return nil
         }

@@ -29,7 +29,7 @@ struct PanelView: View {
             .frame(width: PanelPlacement.size.width, height: PanelPlacement.size.height)
             .glassEffect(.regular, in: .rect(cornerRadius: 22))
         }
-        .onKeyPress(phases: .down, action: handle)
+        .onKeyPress(phases: [.down, .repeat], action: handle)
         .onChange(of: model.focusRequest, initial: true) { searchFocused = true }
     }
 
@@ -117,8 +117,16 @@ struct PanelView: View {
             key = .character(c)
         }
         let command = press.modifiers.contains(.command)
+        let isRepeat = press.phase == .repeat
+        // KeyPress has no key code; the NSEvent being dispatched does. ⌘1–⌘9 go by physical
+        // key so they work on AZERTY, where the number row types & é " ' ( § è ! ç.
+        let event = NSApp.currentEvent
+        let keyCode = event?.type == .keyDown ? event?.keyCode : nil
         guard let action = PanelCommand.resolve(key, command: command, option: press.modifiers.contains(.option),
-                                                queryIsEmpty: model.query.isEmpty) else {
+                                                queryIsEmpty: model.query.isEmpty,
+                                                keyCode: keyCode, isRepeat: isRepeat) else {
+            // A held key the panel ignores (⌫, letters) goes to the field, which repeats it itself.
+            if isRepeat { return .ignored }
             // Typing always lands in the search field, even if something else had focus.
             if !searchFocused, !command, !press.modifiers.contains(.control),
                case .character(let c) = key, !c.isNewline, c.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
