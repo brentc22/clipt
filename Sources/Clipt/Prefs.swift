@@ -1,7 +1,7 @@
 import Foundation
 import CliptCore
 
-/// UserDefaults-backed settings. (`hotKey` arrives with HotKeys in a later task.)
+/// UserDefaults-backed settings.
 @MainActor
 final class Prefs {
     static let shared = Prefs()
@@ -17,6 +17,7 @@ final class Prefs {
         static let showMenuBarIcon = "showMenuBarIcon"
         static let motionEnabled = "motionEnabled"
         static let onboardingDone = "onboardingDone"
+        static let hotKey = "hotKey"
     }
 
     /// 0 in defaults means "unlimited" / "forever"; an absent key means the default.
@@ -63,6 +64,21 @@ final class Prefs {
         get { defaults.bool(forKey: Key.onboardingDone) }
         set { defaults.set(newValue, forKey: Key.onboardingDone) }
     }
+
+    static let hotKeyDidChange = Notification.Name("CliptHotKeyDidChange")
+
+    /// Stored as the combo string. Default ⌘⇧C. Setting it re-registers the global hotkey.
+    var hotKey: HotKeys.Combo {
+        get {
+            defaults.string(forKey: Key.hotKey).flatMap { HotKeys.Combo(string: $0) } ?? Self.defaultHotKey
+        }
+        set {
+            defaults.set(newValue.string, forKey: Key.hotKey)
+            NotificationCenter.default.post(name: Self.hotKeyDidChange, object: nil)
+        }
+    }
+
+    static let defaultHotKey = HotKeys.Combo(keyCode: 8, modifiers: [.command, .shift])
 
     private func bool(_ key: String, default value: Bool) -> Bool {
         defaults.object(forKey: key) == nil ? value : defaults.bool(forKey: key)

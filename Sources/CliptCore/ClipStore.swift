@@ -13,6 +13,14 @@ public struct ClipItem: Sendable, Identifiable, Equatable {
     public let byteSize: Int
     /// Images only, at most 256 px PNG.
     public let thumbnailURL: URL?
+
+    public init(id: Int64, kind: ClipKind, preview: String, sourceBundleID: String?, sourceAppName: String?,
+                copiedAt: Date, isPinned: Bool, byteSize: Int, thumbnailURL: URL?) {
+        self.id = id; self.kind = kind; self.preview = preview
+        self.sourceBundleID = sourceBundleID; self.sourceAppName = sourceAppName
+        self.copiedAt = copiedAt; self.isPinned = isPinned; self.byteSize = byteSize
+        self.thumbnailURL = thumbnailURL
+    }
 }
 
 /// Chip order. `.text` matches text, color and file.

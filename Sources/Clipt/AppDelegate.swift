@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
 
         History.shared.start()
+        PanelController.shared.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
