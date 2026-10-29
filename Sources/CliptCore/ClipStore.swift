@@ -61,6 +61,20 @@ public final class ClipStore {
             }
             db = try Self.open(path)
         }
+        try sweepOrphans()
+    }
+
+    /// Deletes files in blobs/ and thumbs/ that no row references.
+    private func sweepOrphans() throws {
+        let fm = FileManager.default
+        for (dir, sql) in [(blobsDir, "SELECT DISTINCT blob FROM reps"), (thumbsDir, "SELECT DISTINCT thumb FROM items WHERE thumb IS NOT NULL")] {
+            var live = Set<String>()
+            let s = try db.prepare(sql)
+            while try s.step() { live.insert(s.text(0)) }
+            for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where !live.contains(name) {
+                try? fm.removeItem(at: dir.appendingPathComponent(name))
+            }
+        }
     }
 
     private static func open(_ path: String) throws -> Database {
@@ -91,41 +105,44 @@ public final class ClipStore {
 
     @discardableResult
     public func insert(_ c: ClipContent, sourceBundleID: String?, sourceAppName: String?, at: Date = Date()) throws -> ClipItem {
-        // Files first; an orphan blob after a failed transaction is harmless.
-        var blobNames: [String] = []
-        for rep in c.representations { blobNames.append(try writeBlob(rep.data)) }
-        var thumbName: String?
-        if c.kind == .image,
-           let src = c.representations.first(where: { $0.type == PasteType.png || $0.type == PasteType.tiff }),
-           let png = Thumbnailer.png(from: src.data) {
-            let name = c.primaryHash + ".png"
-            let url = thumbsDir.appendingPathComponent(name)
-            if !FileManager.default.fileExists(atPath: url.path) { try png.write(to: url, options: .atomic) }
-            thumbName = name
-        }
-        let id: Int64 = try db.transaction {
-            let find = try db.prepare("SELECT id FROM items WHERE hash = ?")
-            try find.bind([.text(c.primaryHash)])
-            if try find.step() {
-                let id = find.int64(0)
-                try db.run("UPDATE items SET copied_at = ?, source_bundle = ?, source_name = ? WHERE id = ?",
-                           [.double(at.timeIntervalSince1970), .optText(sourceBundleID), .optText(sourceAppName), .int(id)])
+        let find = try db.prepare("SELECT id FROM items WHERE hash = ?")
+        try find.bind([.text(c.primaryHash)])
+        let existing: Int64? = try find.step() ? find.int64(0) : nil
+        let id: Int64
+        if let existing {
+            // Re-copy: only bump; no new blobs or thumbnail.
+            try db.run("UPDATE items SET copied_at = ?, source_bundle = ?, source_name = ? WHERE id = ?",
+                       [.double(at.timeIntervalSince1970), .optText(sourceBundleID), .optText(sourceAppName), .int(existing)])
+            id = existing
+        } else {
+            // Files first; any orphan left by a failed transaction is swept on open.
+            var blobNames: [String] = []
+            for rep in c.representations { blobNames.append(try writeBlob(rep.data)) }
+            var thumbName: String?
+            if c.kind == .image,
+               let src = c.representations.first(where: { $0.type == PasteType.png || $0.type == PasteType.tiff }),
+               let png = Thumbnailer.png(from: src.data) {
+                let name = c.primaryHash + ".png"
+                let url = thumbsDir.appendingPathComponent(name)
+                if !FileManager.default.fileExists(atPath: url.path) { try png.write(to: url, options: .atomic) }
+                thumbName = name
+            }
+            id = try db.transaction {
+                try db.run("""
+                    INSERT INTO items(hash, kind, preview, plain_text, source_bundle, source_name, copied_at, pinned_at, byte_size, thumb)
+                    VALUES(?,?,?,?,?,?,?,NULL,?,?)
+                    """, [.text(c.primaryHash), .text(c.kind.rawValue), .text(c.preview), .optText(c.plainText),
+                          .optText(sourceBundleID), .optText(sourceAppName), .double(at.timeIntervalSince1970),
+                          .int(Int64(c.byteSize)), .optText(thumbName)])
+                let id = db.lastInsertRowID
+                for (i, rep) in c.representations.enumerated() {
+                    try db.run("INSERT INTO reps(item_id, ord, type, blob, size) VALUES(?,?,?,?,?)",
+                               [.int(id), .int(Int64(i)), .text(rep.type), .text(blobNames[i]), .int(Int64(rep.data.count))])
+                }
+                let indexed = c.plainText.map { String($0.prefix(Self.indexedCharacterLimit)) } ?? ""
+                try db.run("INSERT INTO fts(rowid, plain_text, ocr_text) VALUES(?,?,'')", [.int(id), .text(indexed)])
                 return id
             }
-            try db.run("""
-                INSERT INTO items(hash, kind, preview, plain_text, source_bundle, source_name, copied_at, pinned_at, byte_size, thumb)
-                VALUES(?,?,?,?,?,?,?,NULL,?,?)
-                """, [.text(c.primaryHash), .text(c.kind.rawValue), .text(c.preview), .optText(c.plainText),
-                      .optText(sourceBundleID), .optText(sourceAppName), .double(at.timeIntervalSince1970),
-                      .int(Int64(c.byteSize)), .optText(thumbName)])
-            let id = db.lastInsertRowID
-            for (i, rep) in c.representations.enumerated() {
-                try db.run("INSERT INTO reps(item_id, ord, type, blob, size) VALUES(?,?,?,?,?)",
-                           [.int(id), .int(Int64(i)), .text(rep.type), .text(blobNames[i]), .int(Int64(rep.data.count))])
-            }
-            let indexed = c.plainText.map { String($0.prefix(Self.indexedCharacterLimit)) } ?? ""
-            try db.run("INSERT INTO fts(rowid, plain_text, ocr_text) VALUES(?,?,'')", [.int(id), .text(indexed)])
-            return id
         }
         guard let item = try item(id) else { throw SQLiteError(code: SQLITE_ERROR, message: "inserted item vanished") }
         return item

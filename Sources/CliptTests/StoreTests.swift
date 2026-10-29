@@ -98,6 +98,27 @@ func storeTests() {
         let img = try s.insert(imageContent(), sourceBundleID: nil, sourceAppName: nil)
         T.expect(img.thumbnailURL != nil, "thumbnail present")
     }
+    T.test("re-copy with a different secondary representation adds no blobs") {
+        let dir = tmp(); let s = try ClipStore(directory: dir)
+        let blobs = dir.appendingPathComponent("blobs").path
+        func rich(_ rtf: String) -> ClipContent {
+            ClipClassifier.content(from: snap([("public.utf8-plain-text", "same"), ("public.rtf", rtf)]))!
+        }
+        try s.insert(rich("{\\rtf1 one}"), sourceBundleID: nil, sourceAppName: nil)
+        let before = try FileManager.default.contentsOfDirectory(atPath: blobs).count
+        try s.insert(rich("{\\rtf1 two}"), sourceBundleID: nil, sourceAppName: nil)
+        T.equal(try FileManager.default.contentsOfDirectory(atPath: blobs).count, before); T.equal(try s.count(), 1)
+    }
+    T.test("opening the store sweeps orphan blobs and keeps referenced ones") {
+        let dir = tmp(); var s: ClipStore? = try ClipStore(directory: dir)
+        let i = try s!.insert(text("keep me"), sourceBundleID: nil, sourceAppName: nil)
+        let orphan = dir.appendingPathComponent("blobs/deadbeef")
+        try Data("x".utf8).write(to: orphan)
+        s = nil
+        let s2 = try ClipStore(directory: dir)
+        T.expect(!FileManager.default.fileExists(atPath: orphan.path), "orphan removed")
+        T.equal(try s2.representations(of: i.id).first?.data, Data("keep me".utf8))
+    }
     T.test("performance: 10k items, a 5 MB item, search under 50 ms") {
         let s = try ClipStore(directory: tmp())
         try s.batch { for i in 0..<10_000 { try s.insert(text("item \(i) lorem ipsum dolor \(i * 7)"), sourceBundleID: nil, sourceAppName: nil) } }
