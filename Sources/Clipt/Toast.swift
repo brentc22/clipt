@@ -27,6 +27,7 @@ enum Toast {
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = false
+        p.sharingType = .none
         p.ignoresMouseEvents = action == nil
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         hosting.frame = CGRect(x: pad, y: pad, width: size.width, height: size.height)
