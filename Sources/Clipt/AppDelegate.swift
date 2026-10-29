@@ -23,5 +23,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Quit Clipt", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item
+
+        History.shared.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        History.shared.stop()
     }
 }

@@ -8,4 +8,5 @@ print("Version")
 T.test("version falls back outside a bundle") { T.equal(CliptVersion.current, "0.0.0") }
 classifierTests()
 storeTests()
+captureTests()
 T.finish()
