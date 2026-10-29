@@ -6,4 +6,5 @@ setvbuf(stdout, nil, _IOLBF, 0)
 
 print("Version")
 T.test("version falls back outside a bundle") { T.equal(CliptVersion.current, "0.0.0") }
+classifierTests()
 T.finish()
