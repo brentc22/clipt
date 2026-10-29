@@ -6,6 +6,12 @@ public struct PanelList: Equatable, Sendable {
     public private(set) var pinned: [ClipItem]
     public private(set) var recent: [ClipItem]
     public private(set) var selection: Int64?
+    /// True once the store has no more pages. `init` and `replace` derive it from
+    /// `recent.count < pageSize` (a short first page means nothing more to fetch);
+    /// `appendPage` sets it when it receives fewer than `pageSize` rows.
+    public private(set) var isExhausted: Bool
+
+    public static let pageSize = 50
 
     public var rows: [ClipItem] { pinned + recent }
 
@@ -14,6 +20,7 @@ public struct PanelList: Equatable, Sendable {
         self.pinned = pinned
         self.recent = recent
         self.selection = (recent.first ?? pinned.first)?.id
+        self.isExhausted = recent.count < Self.pageSize
     }
 
     /// Clamped at both ends, no wrap.
@@ -38,8 +45,12 @@ public struct PanelList: Equatable, Sendable {
         }
     }
 
+    /// Rows already shown are dropped: an item copied while paging by offset shifts
+    /// rows and would otherwise repeat one, breaking id-based selection and ⌘N.
     public mutating func appendPage(_ more: [ClipItem]) {
-        recent += more
+        var seen = Set(rows.map(\.id))
+        recent += more.filter { seen.insert($0.id).inserted }
+        if more.count < Self.pageSize { isExhausted = true }
     }
 
     /// 1…9 is the position among the visible recent rows; pins never get a number.
@@ -53,8 +64,9 @@ public struct PanelList: Equatable, Sendable {
         return recent[n - 1]
     }
 
-    /// The selection is within 10 rows of the end of `recent`.
+    /// The selection is within 10 rows of the end of `recent` and more pages may exist.
     public var needsNextPage: Bool {
+        guard !isExhausted else { return false }
         let index = recent.firstIndex { $0.id == selection } ?? -1
         return index >= recent.count - 10
     }

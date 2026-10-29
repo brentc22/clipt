@@ -41,12 +41,27 @@ func panelTests() {
         T.equal(PanelList(pinned: [], recent: []).selection, nil)
     }
     T.test("appendPage extends recent and drives needsNextPage") {
-        var l = PanelList(pinned: [], recent: (1...30).map { item(Int64($0)) })
-        T.expect(!l.needsNextPage, "top of a long list needs no page")
-        l.select(25); T.expect(l.needsNextPage, "within 10 of the end")
-        l.appendPage((31...60).map { item(Int64($0)) })
-        T.equal(l.recent.count, 60); T.expect(!l.needsNextPage, "more rows below now")
-        T.expect(PanelList(pinned: [], recent: [item(1)]).needsNextPage, "short list is near its end")
+        var l = PanelList(pinned: [], recent: (1...50).map { item(Int64($0)) })
+        T.expect(!l.needsNextPage, "top of a list needs no page")
+        l.select(45); T.expect(l.needsNextPage, "within 10 of the end")
+        l.appendPage((51...100).map { item(Int64($0)) })
+        T.equal(l.recent.count, 100); T.expect(!l.needsNextPage, "more rows below now")
+    }
+    T.test("appendPage drops ids already shown") {
+        var l = PanelList(pinned: [item(99, pinned: true)], recent: (1...50).map { item(Int64($0)) })
+        l.appendPage([item(50), item(99), item(51)])
+        T.equal(l.recent.map(\.id).count, 51); T.equal(Set(l.rows.map(\.id)).count, l.rows.count)
+        T.equal(l.recent.last?.id, 51)
+    }
+    T.test("short or empty lists are exhausted and never ask for more") {
+        T.expect(!PanelList(pinned: [], recent: []).needsNextPage, "empty")
+        T.expect(!PanelList(pinned: [], recent: [item(1)]).needsNextPage, "short")
+        var l = PanelList(pinned: [], recent: (1...50).map { item(Int64($0)) })
+        T.expect(!l.isExhausted, "full page")
+        l.appendPage((51...60).map { item(Int64($0)) })
+        T.expect(l.isExhausted, "short page exhausts"); l.select(60); T.expect(!l.needsNextPage, "no more")
+        l.replace(pinned: [], recent: (1...50).map { item(Int64($0)) }, resetSelection: true)
+        T.expect(!l.isExhausted, "replace re-derives")
     }
     T.test("placement: screen under the mouse, centered, upper part") {
         let main = CGRect(x: 0, y: 0, width: 1440, height: 900), right = CGRect(x: 1440, y: 0, width: 1920, height: 1080)

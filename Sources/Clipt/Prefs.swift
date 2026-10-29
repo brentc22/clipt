@@ -78,6 +78,9 @@ final class Prefs {
         }
     }
 
+    /// Puts back a combo without announcing a change (used after a failed remap).
+    func restoreHotKey(_ combo: HotKeys.Combo) { defaults.set(combo.string, forKey: Key.hotKey) }
+
     static let defaultHotKey = HotKeys.Combo(keyCode: 8, modifiers: [.command, .shift])
 
     private func bool(_ key: String, default value: Bool) -> Bool {

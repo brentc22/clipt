@@ -1,14 +1,19 @@
 import AppKit
 import SwiftUI
+import Combine
 import CliptCore
 
 /// Owns the one panel. It is built at launch and only ever ordered in and out, so the
 /// hotkey press does no allocation or layout work.
 @MainActor
-final class PanelController {
+final class PanelController: ObservableObject {
     static let shared = PanelController()
 
     /// The app that was frontmost when the panel opened (never Clipt itself); Task 7 pastes into it.
+    /// False when the stored shortcut could not be registered (taken by another app).
+    @Published private(set) var hotKeyRegistered = false
+    private var registeredCombo: HotKeys.Combo?
+
     private(set) var pasteTarget: NSRunningApplication?
 
     private var panel: PanelWindow?
@@ -46,11 +51,24 @@ final class PanelController {
         registerHotKey()
     }
 
+    /// On failure the previous combo is registered again and written back to Prefs, so the
+    /// user keeps a working shortcut and Settings can show why the remap did not take.
     private func registerHotKey() {
         hotKeys.unregisterAll()
-        let combo = Prefs.shared.hotKey
-        if !hotKeys.register(combo, { [weak self] in self?.toggle() }) {
-            NSLog("Clipt: hotkey %@ is taken by another app", combo.symbol)
+        let wanted = Prefs.shared.hotKey
+        let action: @MainActor @Sendable () -> Void = { [weak self] in self?.toggle() }
+        if hotKeys.register(wanted, action) {
+            registeredCombo = wanted
+            hotKeyRegistered = true
+            return
+        }
+        Toast.show("Shortcut \(wanted.symbol) is already in use", symbol: "exclamationmark.triangle")
+        if let previous = registeredCombo, previous != wanted, hotKeys.register(previous, action) {
+            Prefs.shared.restoreHotKey(previous)
+            hotKeyRegistered = true
+        } else {
+            registeredCombo = nil
+            hotKeyRegistered = false
         }
     }
 
@@ -58,8 +76,9 @@ final class PanelController {
 
     func show() {
         guard let panel else { return }
+        // Never a stale target: nil unless a real non-Clipt app is frontmost.
         let front = NSWorkspace.shared.frontmostApplication
-        if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { pasteTarget = front }
+        pasteTarget = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
         let screens = NSScreen.screens.map(\.visibleFrame)
         panel.setFrame(PanelPlacement.frame(screens: screens, mouse: NSEvent.mouseLocation), display: false)
         panel.makeKeyAndOrderFront(nil)
@@ -67,7 +86,9 @@ final class PanelController {
     }
 
     func hide(animated: Bool) {
+        // Task 7 reads pasteTarget before calling hide when pasting.
         guard let panel, panel.isVisible else { return }
+        pasteTarget = nil
         panel.orderOut(nil)
     }
 }
