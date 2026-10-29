@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift run CliptTests
+        timeout-minutes: 3
+      # Ad-hoc signing is allowed here only, to verify the bundle builds. Never for releases.
+      - name: Bundle
+        run: make bundle CLIPT_SIGN_IDENTITY=-
