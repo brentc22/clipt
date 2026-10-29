@@ -1,5 +1,5 @@
 import Foundation
-@testable import CliptCore
+import CliptCore
 
 func snap(_ reps: [(String, String)]) -> PasteboardSnapshot { .init(representations: reps.map { .init(type: $0.0, data: Data($0.1.utf8)) }) }
 
