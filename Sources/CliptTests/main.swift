@@ -9,4 +9,5 @@ T.test("version falls back outside a bundle") { T.equal(CliptVersion.current, "0
 classifierTests()
 storeTests()
 captureTests()
+pasteTests()
 T.finish()
