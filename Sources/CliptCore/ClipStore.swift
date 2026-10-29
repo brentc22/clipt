@@ -160,8 +160,11 @@ public final class ClipStore {
                    [.optDouble(pinned ? Date().timeIntervalSince1970 : nil), .int(id)])
     }
 
-    public func setRecognizedText(_ text: String, for id: Int64) throws {
-        try db.run("UPDATE fts SET ocr_text = ? WHERE rowid = ?", [.text(text), .int(id)])
+    /// Ids are reused once the newest row is deleted, so a late OCR result must prove it
+    /// still belongs to the item it was computed for: a no-op if `id` no longer has `hash`.
+    public func setRecognizedText(_ text: String, for id: Int64, hash: String) throws {
+        try db.run("UPDATE fts SET ocr_text = ? WHERE rowid = ? AND EXISTS (SELECT 1 FROM items WHERE id = ? AND hash = ?)",
+                   [.text(text), .int(id), .int(id), .text(hash)])
     }
 
     public func delete(_ id: Int64) throws { try delete(ids: [id]) }

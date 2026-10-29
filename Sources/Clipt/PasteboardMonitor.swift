@@ -13,6 +13,7 @@ final class PasteboardMonitor {
     private var lastChangeCount = NSPasteboard.general.changeCount
     private var lastStateCheck = Date.distantPast
     private var state: CaptureState = .active
+    private var reading = false
 
     init(history: History) { self.history = history }
 
@@ -67,7 +68,7 @@ final class PasteboardMonitor {
         if changed || (state != .active && Date().timeIntervalSince(lastStateCheck) >= 2) {
             refreshState()
         }
-        guard changed else { return }
+        guard changed, !reading else { return }
         lastChangeCount = count
         guard state == .active, let history else { return }
 
@@ -76,19 +77,53 @@ final class PasteboardMonitor {
             return
         }
 
-        // Type names first; content only if they pass.
+        // Type names first (all items, not just the first); content only if they pass.
         let items = pasteboard.pasteboardItems ?? []
-        let types = items.first?.types.map(\.rawValue) ?? []
+        let types = Array(Set(items.flatMap { $0.types.map(\.rawValue) }))
         let app = NSWorkspace.shared.frontmostApplication
         let bundleID = app?.bundleIdentifier
         if CaptureFilter.shouldSkip(types: types, sourceBundleID: bundleID, ignoredApps: Set(Prefs.shared.ignoredApps)) {
             return
         }
 
+        // Content is read off the main thread: data(forType:) can block on the source app
+        // (promised data) and can be tens of MB. NSPasteboard's thread safety is not
+        // documented, so the reads share one dedicated serial queue, and the monitor reads
+        // nothing from the pasteboard while one is in flight (the next tick catches up).
+        reading = true
+        let appName = app?.localizedName
+        Self.readQueue.async { [weak self] in
+            let reps = Self.readRepresentations(expecting: count)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.reading = false
+                    guard let reps, let history = self.history else { return }
+                    history.capture(PasteboardSnapshot(representations: reps), sourceBundleID: bundleID, sourceAppName: appName)
+                }
+            }
+        }
+    }
+
+    private static let readQueue = DispatchQueue(label: "com.brentc22.Clipt.pasteboard-read", qos: .userInitiated)
+
+    /// Types Clipt understands first, then the rest while the running total stays under the
+    /// cap. Nil if the pasteboard changed meanwhile (the next tick has the newer copy).
+    nonisolated private static func readRepresentations(expecting count: Int) -> [Representation]? {
+        let pasteboard = NSPasteboard.general
+        guard pasteboard.changeCount == count else { return nil }
+        let items = pasteboard.pasteboardItems ?? []
         var reps: [Representation] = []
+        var total = 0
         if let first = items.first {
-            for type in first.types where !type.rawValue.hasPrefix("dyn.") {
-                if let data = first.data(forType: type) { reps.append(Representation(type: type.rawValue, data: data)) }
+            let names = first.types.filter { !$0.rawValue.hasPrefix("dyn.") }
+            let understood = names.filter { PasteType.understood.contains($0.rawValue) }
+            let others = names.filter { !PasteType.understood.contains($0.rawValue) }
+            for type in understood {
+                if let data = first.data(forType: type) { reps.append(Representation(type: type.rawValue, data: data)); total += data.count }
+            }
+            for type in others where total < ClipClassifier.sizeCap {
+                if let data = first.data(forType: type) { reps.append(Representation(type: type.rawValue, data: data)); total += data.count }
             }
         }
         // Several files are several pasteboard items; keep each one's file URL.
@@ -97,9 +132,7 @@ final class PasteboardMonitor {
                 reps.append(Representation(type: PasteType.fileURL, data: data))
             }
         }
-        // The pasteboard changed while we were reading: drop this one, the next tick has the newer copy.
-        guard pasteboard.changeCount == count, !reps.isEmpty else { return }
-
-        history.capture(PasteboardSnapshot(representations: reps), sourceBundleID: bundleID, sourceAppName: app?.localizedName)
+        guard pasteboard.changeCount == count, !reps.isEmpty else { return nil }
+        return reps
     }
 }

@@ -66,8 +66,18 @@ func storeTests() {
         T.equal(try s.search("cafe", filter: .all, limit: 50).recent.map(\.preview), ["Café crème"])
         T.equal(try s.search("brentc", filter: .text, limit: 50).recent.count, 0)       // it's a link
         let img = try s.insert(imageContent(), sourceBundleID: nil, sourceAppName: nil)
-        try s.setRecognizedText("invoice 2026", for: img.id)
+        try s.setRecognizedText("invoice 2026", for: img.id, hash: imageContent().primaryHash)
         T.equal(try s.search("invoice", filter: .images, limit: 50).recent.map(\.id), [img.id])
+    }
+    T.test("late OCR does not land on an item that reused the id") {
+        let s = try ClipStore(directory: tmp())
+        let img = try s.insert(imageContent(), sourceBundleID: nil, sourceAppName: nil)
+        try s.delete(img.id)
+        let fresh = try s.insert(text("fresh note"), sourceBundleID: nil, sourceAppName: nil)
+        T.equal(fresh.id, img.id, "id reused")
+        try s.setRecognizedText("lateocrword", for: img.id, hash: imageContent().primaryHash)
+        T.equal(try s.search("lateocrword", filter: .all, limit: 50).recent.count, 0)
+        T.equal(try s.search("fresh", filter: .all, limit: 50).recent.count, 1)
     }
     T.test("representations round-trip and blobs are cleaned on delete") {
         let dir = tmp(); let s = try ClipStore(directory: dir); let i = try s.insert(text("hi"), sourceBundleID: nil, sourceAppName: nil)
