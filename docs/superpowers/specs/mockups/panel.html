@@ -1,0 +1,59 @@
+<style>
+  .dsk{position:relative;height:470px;border-radius:14px;overflow:hidden;max-width:760px;
+    background:radial-gradient(120% 90% at 20% 10%,#7fb3ff 0%,#4a6cf0 35%,#8a4fd8 70%,#e27bb0 100%);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;color:#1d1d1f}
+  .bgw{position:absolute;inset:30px 50px 40px;background:rgba(255,255,255,.88);border-radius:10px;opacity:.6}
+  .pnl{position:absolute;left:50%;top:52px;transform:translateX(-50%);width:640px;border-radius:22px;overflow:hidden;
+    background:rgba(246,246,250,.66);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);
+    border:1px solid rgba(255,255,255,.6);box-shadow:0 22px 60px rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.75)}
+  .srch{display:flex;align-items:center;gap:10px;padding:14px 16px;font-size:17px;color:#8e8e93;border-bottom:1px solid rgba(0,0,0,.07)}
+  .chips{margin-left:auto;display:flex;gap:6px}
+  .chip{font-size:11px;padding:3px 9px;border-radius:20px;background:rgba(0,0,0,.06);color:#3a3a3c}
+  .bod{display:flex;height:300px}
+  .lst{width:52%;padding:6px;border-right:1px solid rgba(0,0,0,.06);overflow:hidden}
+  .sec{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8e8e93;padding:7px 10px 3px}
+  .r{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:9px;font-size:12.5px}
+  .r.on{background:#0a84ff;color:#fff}
+  .ap{width:18px;height:18px;border-radius:5px;flex:none}
+  .tx{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kb{font-size:11px;opacity:.45;font-variant-numeric:tabular-nums}
+  .r.on .kb{opacity:.85}
+  .pv{flex:1;padding:16px;display:flex;flex-direction:column;gap:10px}
+  .pvbox{flex:1;background:rgba(255,255,255,.6);border-radius:12px;padding:12px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#3a3a3c;word-break:break-all}
+  .meta{font-size:11px;color:#6e6e73;display:grid;grid-template-columns:auto 1fr;gap:3px 12px}
+  .meta b{font-weight:500;color:#8e8e93}
+  .ft{display:flex;gap:16px;padding:9px 16px;font-size:11px;color:#6e6e73;border-top:1px solid rgba(0,0,0,.07)}
+  .ft kbd{font-family:inherit;background:rgba(0,0,0,.07);border-radius:4px;padding:1px 5px;margin-right:4px;color:#3a3a3c}
+  .ft .rt{margin-left:auto}
+</style>
+
+<h2>Clipt panel — approved direction (option B)</h2>
+<p class="subtitle">Spotlight-style Liquid Glass panel. Static HTML mockup; layout and proportions are the reference, not pixel values.</p>
+
+<div class="dsk">
+  <div class="bgw"></div>
+  <div class="pnl">
+    <div class="srch">🔍 <span>Search clipboard…</span>
+      <div class="chips"><span class="chip">All</span><span class="chip">Text</span><span class="chip">Images</span><span class="chip">Links</span></div>
+    </div>
+    <div class="bod">
+      <div class="lst">
+        <div class="sec">Pinned</div>
+        <div class="r"><span class="ap" style="background:#8e8e93"></span><span class="tx">brent@vernast.be</span><span class="kb">📌</span></div>
+        <div class="sec">Recent</div>
+        <div class="r on"><span class="ap" style="background:#fff4"></span><span class="tx">https://github.com/brentc22/catchbox</span><span class="kb">⌘1</span></div>
+        <div class="r"><span class="ap" style="background:#34c759"></span><span class="tx">brew install --cask catchbox</span><span class="kb">⌘2</span></div>
+        <div class="r"><span class="ap" style="background:#ff9f0a"></span><span class="tx">Meeting moved to 2 pm</span><span class="kb">⌘3</span></div>
+        <div class="r"><span class="ap" style="background:#af52de"></span><span class="tx">🖼 Screenshot 14.02.31</span><span class="kb">⌘4</span></div>
+        <div class="r"><span class="ap" style="background:#0a84ff"></span><span class="tx">let history = ClipStore.shared</span><span class="kb">⌘5</span></div>
+        <div class="r"><span class="ap" style="background:#ff375f"></span><span class="tx">#FF375F</span><span class="kb">⌘6</span></div>
+        <div class="r"><span class="ap" style="background:#30b0c7"></span><span class="tx">Call the accountant tomorrow</span><span class="kb">⌘7</span></div>
+      </div>
+      <div class="pv">
+        <div class="pvbox">https://github.com/brentc22/catchbox</div>
+        <div class="meta"><b>From</b><span>Safari</span><b>Copied</b><span>just now</span><b>Type</b><span>Link · 36 characters</span></div>
+      </div>
+    </div>
+    <div class="ft"><span><kbd>↩</kbd>Paste</span><span><kbd>⌥↩</kbd>Paste as plain text</span><span><kbd>⌘P</kbd>Pin</span><span><kbd>⌫</kbd>Delete</span><span class="rt"><kbd>esc</kbd>Close</span></div>
+  </div>
+</div>
