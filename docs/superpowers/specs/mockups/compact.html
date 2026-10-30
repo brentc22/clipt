@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipt — compact panel</title>
+<!--
+  Assumptions (Brent: "cleaner, photos previewed small, everything smaller and more compact"):
+  - A = today's panel (640×404) for reference, B = compact two-pane, C = mini single column.
+  - Real assets only: Big Sur photos + Clipt's own screenshot as copied images, real macOS app icons.
+  - Glass is approximated with backdrop-filter; the real app uses Liquid Glass.
+  - ↑/↓ move the selection in the panel you last clicked; T toggles light/dark.
+-->
+<style>
+  :root {
+    --sf: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --glass: rgba(246, 246, 248, .62);
+    --glass-edge: rgba(255, 255, 255, .55);
+    --ink: #1d1d1f;
+    --ink-2: #6e6e73;
+    --ink-3: #8e8e93;
+    --hair: rgba(0, 0, 0, .08);
+    --fill: rgba(0, 0, 0, .05);
+    --accent: #0a84ff;
+    --page: #e9e9ee;
+    --label: #1d1d1f;
+  }
+  :root[data-theme="dark"] {
+    --glass: rgba(40, 40, 46, .58);
+    --glass-edge: rgba(255, 255, 255, .14);
+    --ink: #f5f5f7;
+    --ink-2: #a1a1a6;
+    --ink-3: #8e8e93;
+    --hair: rgba(255, 255, 255, .09);
+    --fill: rgba(255, 255, 255, .07);
+    --page: #16161a;
+    --label: #f5f5f7;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--page); color: var(--label); font-family: var(--sf); -webkit-font-smoothing: antialiased; }
+  header { max-width: 1240px; margin: 0 auto; padding: 36px 24px 8px; display: flex; align-items: end; gap: 24px; }
+  header h1 { font-size: 26px; font-weight: 650; letter-spacing: -.02em; }
+  header p { color: var(--ink-2); font-size: 14px; margin-top: 6px; max-width: 64ch; text-wrap: pretty; }
+  header button { margin-left: auto; font: 500 13px var(--sf); padding: 7px 14px; border-radius: 99px; border: 1px solid var(--hair); background: var(--fill); color: var(--label); cursor: pointer; }
+
+  .variant { max-width: 1240px; margin: 28px auto 0; padding: 0 24px; }
+  .variant h2 { font-size: 15px; font-weight: 650; display: flex; gap: 10px; align-items: baseline; }
+  .variant h2 span { font-weight: 400; color: var(--ink-2); font-size: 13px; }
+  .desk {
+    margin-top: 12px; border-radius: 16px; overflow: hidden; position: relative;
+    background: url(compact-assets/big-sur-coastline.jpg) center/cover, #4a6a8a;
+    display: grid; place-items: center; padding: 56px 16px;
+  }
+  :root[data-theme="dark"] .desk { background: linear-gradient(rgba(0,0,0,.35), rgba(0,0,0,.35)), url(compact-assets/big-sur-coastline.jpg) center/cover; }
+  .notes { color: var(--ink-2); font-size: 13px; margin-top: 10px; line-height: 1.5; }
+  .notes b { color: var(--label); font-weight: 600; }
+
+  /* ---------- shared panel ---------- */
+  .panel {
+    background: var(--glass); color: var(--ink);
+    backdrop-filter: blur(34px) saturate(185%); -webkit-backdrop-filter: blur(34px) saturate(185%);
+    border: 1px solid var(--glass-edge);
+    box-shadow: 0 24px 70px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.35);
+    display: flex; flex-direction: column; overflow: hidden; outline: none;
+  }
+  .panel.focus { box-shadow: 0 24px 70px rgba(0,0,0,.32), 0 0 0 3px rgba(10,132,255,.45); }
+  .search { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--hair); }
+  .search svg { flex: none; color: var(--ink-3); }
+  .search .q { flex: 1; color: var(--ink-3); white-space: nowrap; }
+  .chips { display: flex; gap: 4px; }
+  .chip { border-radius: 99px; color: var(--ink-2); background: var(--fill); }
+  .chip.on { background: var(--accent); color: #fff; font-weight: 600; }
+  .body { display: flex; flex: 1; min-height: 0; }
+  .list { overflow: hidden; }
+  .sec { font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
+  .row { display: flex; align-items: center; cursor: default; position: relative; }
+  .row .tx { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .k { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .row .meta { color: var(--ink-3); white-space: nowrap; }
+  .row.sel { background: var(--accent); color: #fff; }
+  .row.sel .k, .row.sel .meta { color: rgba(255,255,255,.8); }
+  .ic { flex: none; border-radius: 4px; object-fit: contain; }
+  .thumb { flex: none; object-fit: cover; border-radius: 3px; box-shadow: 0 0 0 .5px rgba(0,0,0,.18); }
+  .swatch { flex: none; border-radius: 50%; box-shadow: 0 0 0 .5px rgba(0,0,0,.2); }
+  .pv { display: flex; flex-direction: column; min-width: 0; }
+  .pvbox { flex: 1; min-height: 0; border-radius: 10px; background: var(--fill); overflow: hidden; display: grid; place-items: center; }
+  .pvbox pre { font: 12px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; word-break: break-all; padding: 12px; align-self: start; justify-self: stretch; }
+  .pvbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .foot { display: flex; gap: 16px; border-top: 1px solid var(--hair); color: var(--ink-2); }
+  kbd { font: inherit; background: var(--fill); border-radius: 4px; padding: 0 5px; margin-right: 4px; color: var(--ink); }
+
+  /* ---------- A: today ---------- */
+  .A { width: 640px; height: 404px; border-radius: 22px; }
+  .A .search { height: 50px; padding: 0 16px; font-size: 17px; }
+  .A .chip { font-size: 11px; padding: 3px 9px; }
+  .A .list { width: 52%; padding: 6px; border-right: 1px solid var(--hair); }
+  .A .sec { font-size: 10px; padding: 7px 10px 3px; }
+  .A .row { height: 30px; gap: 9px; padding: 0 10px; border-radius: 9px; font-size: 13px; }
+  .A .ic { width: 18px; height: 18px; }
+  .A .thumb { width: 30px; height: 20px; }
+  .A .swatch { width: 11px; height: 11px; }
+  .A .row .k { font-size: 11px; }
+  .A .pv { flex: 1; padding: 16px; gap: 10px; }
+  .A .pvmeta { font-size: 11px; color: var(--ink-2); display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; }
+  .A .pvmeta b { font-weight: 500; color: var(--ink-3); }
+  .A .foot { padding: 9px 16px; font-size: 11px; }
+
+  /* ---------- B: compact two-pane ---------- */
+  .B { width: 540px; height: 330px; border-radius: 18px; }
+  .B .search { height: 40px; padding: 0 12px 0 14px; font-size: 15px; gap: 8px; }
+  .B .chips { gap: 2px; padding: 2px; border-radius: 99px; background: var(--fill); }
+  .B .chip { font-size: 10.5px; padding: 2px 8px; background: transparent; }
+  .B .chip.on { background: var(--glass-edge); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  :root[data-theme="dark"] .B .chip.on { background: rgba(255,255,255,.16); }
+  .B .list { width: 56%; padding: 5px; }
+  .B .sec { font-size: 9.5px; padding: 6px 8px 2px; }
+  .B .row { height: 24px; gap: 7px; padding: 0 8px; border-radius: 7px; font-size: 12px; }
+  .B .ic { width: 14px; height: 14px; border-radius: 3px; }
+  .B .thumb { width: 26px; height: 17px; }
+  .B .swatch { width: 9px; height: 9px; }
+  .B .row .k { font-size: 10.5px; }
+  .B .row .meta { font-size: 11px; }
+  .B .pv { flex: 1; padding: 8px 10px 10px 4px; gap: 6px; }
+  .B .pvbox { border-radius: 9px; }
+  .B .pvbox pre { font-size: 11px; padding: 10px; }
+  .B .pvbox img { max-height: 150px; border-radius: 4px; box-shadow: 0 1px 6px rgba(0,0,0,.18); }
+  .B .pvmeta { font-size: 11px; color: var(--ink-3); padding: 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ---------- C: mini single column ---------- */
+  .C { width: 420px; height: 336px; border-radius: 16px; }
+  .C .search { height: 38px; padding: 0 12px; font-size: 14px; gap: 8px; }
+  .C .search .hint { font-size: 11px; color: var(--ink-3); }
+  .C .list { flex: 1; padding: 4px; }
+  .C .sec { font-size: 9.5px; padding: 6px 8px 2px; }
+  .C .row { height: 26px; gap: 8px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; }
+  .C .row.img { height: 40px; }
+  .C .ic { width: 14px; height: 14px; border-radius: 3px; }
+  .C .thumb { width: 52px; height: 32px; border-radius: 5px; }
+  .C .swatch { width: 9px; height: 9px; }
+  .C .row .k { font-size: 10.5px; }
+  .C .row .meta { font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Clipt — compacter panel</h1>
+    <p>A is het panel zoals het nu is. B en C zijn twee compacte richtingen. Klik op een panel en gebruik ↑/↓ om de selectie te verplaatsen. Druk T voor donker/licht.</p>
+  </div>
+  <button id="theme">Light / Dark</button>
+</header>
+
+<section class="variant">
+  <h2>A · Huidig <span>640 × 404 pt · 30 pt rijen · onderbalk met sneltoetsen</span></h2>
+  <div class="desk"><div class="panel A" tabindex="0" data-v="A"></div></div>
+</section>
+
+<section class="variant">
+  <h2>B · Compact <span>540 × 330 pt · 24 pt rijen · foto's als mini-thumbnail · geen onderbalk</span></h2>
+  <div class="desk"><div class="panel B" tabindex="0" data-v="B"></div></div>
+  <p class="notes"><b>Wat verandert:</b> alles ~20% kleiner, filters als één subtiel segment, foto's tonen een klein plaatje met de afmetingen in plaats van het woord "Image", het voorbeeld rechts toont foto's klein en de metadata in één regel. 11 rijen zichtbaar in plaats van 9.</p>
+</section>
+
+<section class="variant">
+  <h2>C · Mini <span>420 × 336 pt · één kolom · geen voorbeeldvak · foto's als grotere thumbnail in de rij</span></h2>
+  <div class="desk"><div class="panel C" tabindex="0" data-v="C"></div></div>
+  <p class="notes"><b>Wat verandert:</b> het voorbeeldvak verdwijnt helemaal. Foto's zie je direct in de lijst als thumbnail, tekst als één regel. Het meest Maccy/Spotlight-achtige: klein, snel, alleen de lijst.</p>
+</section>
+<div style="height:48px"></div>
+
+<script>
+const A = 'compact-assets/';
+const items = [
+  { id: 9, pinned: true, kind: 'text', app: 'mail', appName: 'Mail', text: 'brent@vernast.be', when: '3 d ago' },
+  { id: 1, kind: 'link', app: 'safari', appName: 'Safari', text: 'https://github.com/brentc22/clipt', when: 'just now' },
+  { id: 2, kind: 'image', app: 'photos', appName: 'Photos', img: 'big-sur-mountains.jpg', dims: '3024 × 1964', when: '1 min ago', size: '2.4 MB' },
+  { id: 3, kind: 'text', app: 'terminal', appName: 'Terminal', text: 'brew install --cask brentc22/tap/glint', when: '4 min ago' },
+  { id: 4, kind: 'image', app: 'preview', appName: 'Screenshot', img: 'screenshot.png', dims: '1360 × 888', when: '6 min ago', size: '1.2 MB' },
+  { id: 5, kind: 'text', app: 'mail', appName: 'Mail', text: 'Afspraak verzet naar donderdag 14u, zelfde plaats.', when: '12 min ago' },
+  { id: 6, kind: 'color', app: 'safari', appName: 'Safari', text: '#FF375F', color: '#FF375F', when: '20 min ago' },
+  { id: 7, kind: 'text', app: 'terminal', appName: 'Terminal', text: 'let store = try ClipStore(directory: History.directory)', when: '34 min ago' },
+  { id: 8, kind: 'image', app: 'photos', appName: 'Photos', img: 'big-sur-road.jpg', dims: '4032 × 3024', when: '1 h ago', size: '3.1 MB' },
+  { id: 10, kind: 'file', app: 'finder', appName: 'Finder', text: 'Invoice-2026-10.pdf, Contract.pages', when: '2 h ago' },
+  { id: 11, kind: 'text', app: 'notes', appName: 'Notes', text: 'Morgen boekhouder bellen over btw-aangifte', when: '3 h ago' },
+  { id: 12, kind: 'image', app: 'photos', appName: 'Photos', img: 'big-sur-coastline.jpg', dims: '2880 × 1800', when: 'yesterday', size: '1.9 MB' },
+  { id: 13, kind: 'link', app: 'safari', appName: 'Safari', text: 'https://developer.apple.com/documentation/swiftui/glass', when: 'yesterday' },
+];
+const kindLabel = { text: 'Text', link: 'Link', image: 'Image', color: 'Color', file: 'Files' };
+const sel = { A: 1, B: 1, C: 1 };
+const searchIcon = s => `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5" stroke-linecap="round"/></svg>`;
+const icon = it => `<img class="ic" src="${A}${it.app}.png" alt="">`;
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+function lead(it, v) {
+  if (it.kind === 'image') return `<img class="thumb" src="${A}${it.img}" alt="">`;
+  if (it.kind === 'color') return `<span class="swatch" style="background:${it.color}"></span>`;
+  return '';
+}
+function label(it, v) {
+  if (it.kind === 'image') return v === 'A' ? 'Image' : `<span>${it.dims}</span>`;
+  return esc(it.text);
+}
+
+function rows(v) {
+  const pinned = items.filter(i => i.pinned), recent = items.filter(i => !i.pinned);
+  let n = 0, out = '';
+  const row = (it, hint) => {
+    const img = it.kind === 'image' && v === 'C' ? ' img' : '';
+    const meta = v === 'C' && it.kind === 'image' ? `<span class="meta">${it.when}</span>` : '';
+    const k = hint ? `<span class="k">⌘${hint}</span>` : (it.pinned ? `<span class="k"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M10.5 1.5l4 4-2 1-2.5 2.5.5 3.5-1.5 1.5-3-3L2 15l-.5-.5 4-4-3-3L4 6l3.5.5L10 4l.5-2.5z"/></svg></span>` : '');
+    return `<div class="row${img}${sel[v] === it.id ? ' sel' : ''}" data-id="${it.id}">${icon(it)}${lead(it, v)}<span class="tx">${label(it, v)}</span>${meta}${k}</div>`;
+  };
+  out += `<div class="sec">Pinned</div>` + pinned.map(it => row(it)).join('');
+  out += `<div class="sec">Recent</div>` + recent.map(it => row(it, ++n <= 9 ? n : 0)).join('');
+  return out;
+}
+
+function preview(v) {
+  const it = items.find(i => i.id === sel[v]);
+  const box = it.kind === 'image' ? `<img src="${A}${it.img}" alt="">`
+    : it.kind === 'color' ? `<div style="width:64px;height:64px;border-radius:14px;background:${it.color};box-shadow:0 0 0 .5px rgba(0,0,0,.2)"></div>`
+    : `<pre>${esc(it.text)}</pre>`;
+  if (v === 'A') return `<div class="pv"><div class="pvbox">${box}</div><div class="pvmeta"><b>From</b><span>${it.appName}</span><b>Copied</b><span>${it.when}</span><b>Type</b><span>${kindLabel[it.kind]}${it.size ? ' · ' + it.size : ''}</span></div></div>`;
+  return `<div class="pv"><div class="pvbox">${box}</div><div class="pvmeta">${it.appName} · ${it.when}${it.dims ? ' · ' + it.dims : ''}${it.size ? ' · ' + it.size : ''}</div></div>`;
+}
+
+function render(v) {
+  const p = document.querySelector(`.panel[data-v="${v}"]`);
+  const chips = v === 'C' ? `<span class="hint">⌘1–9</span>`
+    : `<div class="chips">${['All', 'Text', 'Images', 'Links'].map((c, i) => `<span class="chip${i ? '' : ' on'}">${c}</span>`).join('')}</div>`;
+  const search = `<div class="search">${searchIcon(v === 'A' ? 18 : 14)}<span class="q">Search clipboard…</span>${chips}</div>`;
+  const body = v === 'C' ? `<div class="body"><div class="list">${rows(v)}</div></div>`
+    : `<div class="body"><div class="list">${rows(v)}</div>${preview(v)}</div>`;
+  const foot = v === 'A' ? `<div class="foot"><span><kbd>↩</kbd>Paste</span><span><kbd>⌥↩</kbd>Paste as plain text</span><span><kbd>⌘P</kbd>Pin</span><span><kbd>⌫</kbd>Delete</span><span style="margin-left:auto"><kbd>esc</kbd>Close</span></div>` : '';
+  p.innerHTML = search + body + foot;
+}
+
+const order = [...items.filter(i => i.pinned), ...items.filter(i => !i.pinned)].map(i => i.id);
+let active = 'B';
+function focus(v) {
+  active = v;
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('focus', p.dataset.v === v));
+}
+document.querySelectorAll('.panel').forEach(p => {
+  p.addEventListener('click', e => {
+    focus(p.dataset.v);
+    const r = e.target.closest('.row');
+    if (r) { sel[p.dataset.v] = +r.dataset.id; render(p.dataset.v); }
+  });
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 't' || e.key === 'T') return toggleTheme();
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const i = order.indexOf(sel[active]);
+  sel[active] = order[Math.max(0, Math.min(order.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+  render(active);
+});
+function toggleTheme() {
+  const r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('clipt-mock-theme', r.dataset.theme); } catch (_) {}
+}
+document.getElementById('theme').onclick = toggleTheme;
+try { const t = localStorage.getItem('clipt-mock-theme'); if (t) document.documentElement.dataset.theme = t; } catch (_) {}
+['A', 'B', 'C'].forEach(render);
+focus('B');
+</script>
+</body>
+</html>
