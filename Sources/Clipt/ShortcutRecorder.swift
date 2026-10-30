@@ -24,6 +24,8 @@ final class RecorderButton: NSButton {
     var combo: HotKeys.Combo? { didSet { refresh() } }
     private var recording = false { didSet { refresh() } }
     private var monitor: Any?
+    /// The recording window's resign-key and close notifications, while recording.
+    private var windowObservers: [NSObjectProtocol] = []
 
     init() {
         super.init(frame: .zero)
@@ -46,10 +48,27 @@ final class RecorderButton: NSButton {
         recording ? stop() : start()
     }
 
+    /// Recording ends whenever the button leaves its window, or the window stops being key or
+    /// closes: a monitor left behind would swallow the panel's keys and rebind the hotkey.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow !== window { stop() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    isolated deinit { stop() }
+
     private func start() {
+        guard let window else { return }
         recording = true
+        let nc = NotificationCenter.default
+        for name in [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification] {
+            windowObservers.append(nc.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stop() }
+            })
+        }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
+            // Only keys aimed at this button's window; anything else (the panel) is left alone.
+            guard let self, self.recording, let window = self.window, event.window === window else { return event }
             let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
             let isFunctionKey = HotKeys.Combo.specialKeys[Int(event.keyCode)]?.hasPrefix("F") == true
             switch Int(event.keyCode) {
@@ -65,8 +84,10 @@ final class RecorderButton: NSButton {
     }
 
     private func stop() {
-        recording = false
+        if recording { recording = false }
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
+        windowObservers = []
     }
 }
