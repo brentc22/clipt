@@ -125,8 +125,9 @@ the daily check.
 Before swapping anything in, Clipt checks that the download is `com.brentc22.Clipt`, is the
 version the release promised, comes as a single `Clipt.app` in the archive, and that
 macOS accepts its code signature against **the designated requirement of the copy you are
-running** (same bundle id, same certificate). An
-update signed by anyone else is refused. If any check fails, or `/Applications` isn't
+running** (same bundle id, same certificate). The download has to be https from a GitHub
+host, but what is actually enforced is that the update is signed by the same certificate as
+the installed copy; an update that isn't is refused. If any check fails, or `/Applications` isn't
 writable, Clipt offers the download page instead.
 
 Releases are signed with a self-signed certificate (`Clipt Self-Signed`), not ad-hoc, so
@@ -152,23 +153,50 @@ drops the Accessibility grant. `make bundle CLIPT_SIGN_IDENTITY=-` exists for CI
 ### Releasing
 
 Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`: it imports the signing
-identity into a temporary keychain, runs the tests, builds and signs the universal app,
+identity into a temporary keychain (after checking that the first section of `CHANGELOG.md`
+is this version's, not `## Unreleased`), runs the tests, builds and signs the universal app,
 checks that it is signed with the identity pinned in `Resources/designated-requirement.txt`, and publishes `Clipt.zip` with the newest
 section of `CHANGELOG.md` as the notes.
 
-The identity comes from two repository secrets:
+The identity comes from two secrets of a GitHub Environment named `release`, which should be
+limited to `v*` tags (Settings → Environments → release → Deployment branches and tags), so
+nothing but a tag push can read them:
 
-- `CLIPT_SIGNING_P12`: the base64 of the exported `.p12`
-- `CLIPT_SIGNING_PASSWORD`: its password (`clipt` for a certificate made by the script)
+- `CLIPT_SIGNING_P12`: the base64 of the exported `.p12`. **This is the secret.** Anyone who
+  has it can sign updates that installed copies accept.
+- `CLIPT_SIGNING_PASSWORD`: the password the `.p12` was exported with. It only protects the
+  file in transit. The password `clipt` that `scripts/make-signing-cert.sh` uses is published
+  in this repository, so it protects nothing. When you export from Keychain Access, **choose
+  your own password** and put that in `CLIPT_SIGNING_PASSWORD`.
 
 `scripts/make-signing-cert.sh --export <dir>` writes `<dir>/clipt-signing.p12` and prints
 its base64, but only on the run that **creates** the identity. If `Clipt Self-Signed` is
 already in your keychain, export it by hand: open Keychain Access → login → My
 Certificates, select **Clipt Self-Signed** (the private key must be under it), File →
-Export Items…, choose `.p12`, and set the password. Then
-`base64 -i clipt-signing.p12 | pbcopy` and paste it into the secret. Delete the `.p12`
-afterwards. The same certificate must sign every release, or installed copies will refuse
-the update.
+Export Items…, choose `.p12`, and set your own password. Then
+`base64 -i clipt-signing.p12 | pbcopy` and paste it into the secret
+(`gh secret set CLIPT_SIGNING_P12 --env release`). Delete the `.p12` afterwards. The same
+certificate must sign every release, or installed copies will refuse the update.
+
+**If the import fails.** A `.p12` exported from Keychain Access on a recent macOS can use
+encryption that `security import` on the runner can't read. Repack it with OpenSSL, as
+`scripts/make-signing-cert.sh` does:
+
+```
+openssl pkcs12 -in clipt-signing.p12 -nodes -passin pass:YOUR_PASSWORD \
+  | openssl pkcs12 -export -out clipt-signing-legacy.p12 -passout pass:YOUR_PASSWORD \
+      -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
+```
+
+(With OpenSSL 3 you can also add `-legacy` to the first command if it can't read the file.)
+Use the base64 of the repacked file.
+
+**Test the secrets before the first tag.** Run the *Release* workflow by hand (Actions →
+Release → Run workflow, `dry_run` on, the default). It imports the identity, lists it with
+`security find-identity`, and deletes the keychain; nothing is built or released. Because
+the `release` environment is limited to tags, a manual run from a branch is rejected until
+you temporarily add that branch to the environment's allowed refs. A real release only
+ever comes from pushing a `v*` tag.
 
 ```
 Sources/
