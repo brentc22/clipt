@@ -8,10 +8,13 @@ import CliptCore
 @MainActor
 enum SettingsWindow {
     private static var window: NSWindow?
+    private static var model: SettingsModel?
 
     static func show() {
         if window == nil {
-            let host = NSHostingController(rootView: SettingsView(model: SettingsModel(), panel: PanelController.shared))
+            let model = SettingsModel()
+            self.model = model
+            let host = NSHostingController(rootView: SettingsView(model: model, panel: PanelController.shared))
             let w = NSWindow(contentViewController: host)
             w.title = "Clipt Settings"
             w.styleMask = [.titled, .closable, .miniaturizable]
@@ -20,6 +23,7 @@ enum SettingsWindow {
             w.center()
             window = w
         }
+        model?.hotKeyNote = nil
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
     }
@@ -191,6 +195,9 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 480)
+        .onChange(of: panel.hotKeyRegistered) { _, registered in
+            if registered { model.hotKeyNote = nil }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refreshLaunchAtLogin()
         }

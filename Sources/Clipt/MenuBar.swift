@@ -92,8 +92,12 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = "Clear clipboard history? Pinned items are kept."
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Clear History")
-        alert.addButton(withTitle: "Cancel")
+        let clear = alert.addButton(withTitle: "Clear History")
+        let cancel = alert.addButton(withTitle: "Cancel")
+        // Return must never clear: Cancel is the default, Escape also cancels.
+        clear.hasDestructiveAction = true
+        clear.keyEquivalent = ""
+        cancel.keyEquivalent = "\r"
         if alert.runModal() == .alertFirstButtonReturn { History.shared.clearHistory() }
     }
 
