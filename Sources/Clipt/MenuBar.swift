@@ -92,13 +92,21 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = "Clear clipboard history? Pinned items are kept."
         alert.alertStyle = .warning
-        let clear = alert.addButton(withTitle: "Clear History")
+        // Cancel is first and the default, so Return cancels. Making it the default drops
+        // AppKit's own Escape mapping, so Escape is handled here. Clear History is the
+        // second button with no key equivalent: only a click clears.
         let cancel = alert.addButton(withTitle: "Cancel")
-        // Return must never clear: Cancel is the default, Escape also cancels.
+        alert.window.defaultButtonCell = cancel.cell as? NSButtonCell
+        let clear = alert.addButton(withTitle: "Clear History")
         clear.hasDestructiveAction = true
-        clear.keyEquivalent = ""
-        cancel.keyEquivalent = "\r"
-        if alert.runModal() == .alertFirstButtonReturn { History.shared.clearHistory() }
+        let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }
+            NSApp.abortModal()
+            return nil
+        }
+        let response = alert.runModal()
+        if let escape { NSEvent.removeMonitor(escape) }
+        if response == .alertSecondButtonReturn { History.shared.clearHistory() }
     }
 
     // MARK: Icon
