@@ -11,10 +11,12 @@ jobs:
   release:
     runs-on: macos-26
     timeout-minutes: 25
-    env:
-      KEYCHAIN: ${{ runner.temp }}/clipt-signing.keychain-db
     steps:
       - uses: actions/checkout@v4
+
+      # The runner context isn't available in job-level env, so set the path here.
+      - name: Set the keychain path
+        run: echo "KEYCHAIN=$RUNNER_TEMP/clipt-signing.keychain-db" >> "$GITHUB_ENV"
 
       # Releases are signed with the same "Clipt Self-Signed" identity as local builds, so
       # an installed copy accepts the update (and keeps its Accessibility grant). The
