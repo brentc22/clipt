@@ -174,13 +174,6 @@ public enum UpdateInstaller {
         return certificateRequirement(of: staticCode)
     }
 
-    /// The designated requirement of the code at `url`, if it is certificate-based.
-    public static func designatedRequirement(of url: URL) -> SecRequirement? {
-        var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code else { return nil }
-        return certificateRequirement(of: code)
-    }
-
     private static func certificateRequirement(of code: SecStaticCode) -> SecRequirement? {
         var requirement: SecRequirement?
         guard SecCodeCopyDesignatedRequirement(code, [], &requirement) == errSecSuccess, let requirement,

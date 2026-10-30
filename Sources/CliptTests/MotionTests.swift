@@ -38,7 +38,6 @@ func motionTests() {
     T.test("paste starts well inside the 250 ms budget") {
         T.lessThan(PanelMotion.pasteStartDelay(style: .springs), 0.18, "springs")
         T.lessThan(PanelMotion.pasteStartDelay(style: .fades), 0.13, "fades")
-        T.lessThan(PanelMotion.pasteCloseDuration, PanelMotion.pasteHandoff + 0.001, "close ends by the handoff")
     }
     T.test("a held arrow key never animates the scroll") {
         T.equal(PanelMotion.animatesScroll(isKeyRepeat: true, style: .springs), false)

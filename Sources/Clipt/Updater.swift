@@ -35,8 +35,7 @@ final class Updater: ObservableObject {
     }
 
     var currentVersion: AppVersion {
-        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String).flatMap(AppVersion.init)
-            ?? AppVersion("0.0.0")!
+        AppVersion(CliptVersion.current) ?? AppVersion("0.0.0")!
     }
 
     /// Checks shortly after launch and then hourly whether a day has passed since the last check.

@@ -9,11 +9,11 @@ import CliptCore
 final class PanelController: ObservableObject {
     static let shared = PanelController()
 
-    /// The app that was frontmost when the panel opened (never Clipt itself); Task 7 pastes into it.
     /// False when the stored shortcut could not be registered (taken by another app).
     @Published private(set) var hotKeyRegistered = false
     private var registeredCombo: HotKeys.Combo?
 
+    /// The app that was frontmost when the panel opened (never Clipt itself); the paste goes into it.
     private(set) var pasteTarget: NSRunningApplication?
 
     private var panel: PanelWindow?
@@ -140,17 +140,16 @@ final class PanelController: ObservableObject {
     }
 
     /// The paste path: a quick close, and `then` runs once the panel is off screen — and with
-    /// it keyboard focus is back in the target app — or `PanelMotion.pasteHandoff` after the
-    /// close began, whichever comes first. The ⌘V never waits out the whole animation.
+    /// it keyboard focus is back in the target app — or `PanelMotion.pasteCloseDuration` after
+    /// the close began, whichever comes first. The ⌘V never waits out the whole animation.
     func hideForPaste(then: @escaping () -> Void) {
         guard let panel, panel.isVisible else { return then() }
         afterClose.append(then)
         close(animated: true, duration: PanelMotion.pasteCloseDuration)
         let token = closeToken
         // The fade is done at `pasteCloseDuration`; waiting for Core Animation's completion on top
-        // of that costs another frame or two, so the deadline is whichever of the two is sooner.
-        let deadline = min(PanelMotion.pasteCloseDuration, PanelMotion.pasteHandoff)
-        DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self] in
+        // of that costs another frame or two, so the deadline is the duration itself.
+        DispatchQueue.main.asyncAfter(deadline: .now() + PanelMotion.pasteCloseDuration) { [weak self] in
             MainActor.assumeIsolated {
                 // Still on screen at the deadline: finish now, so focus is back before the ⌘V.
                 guard let self, self.isClosing, self.closeToken == token else { return }

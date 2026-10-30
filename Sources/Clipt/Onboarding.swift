@@ -10,8 +10,6 @@ enum Onboarding {
     private static var model: OnboardingModel?
     private static let closer = WindowCloser()
 
-    static var isShowing: Bool { window?.isVisible ?? false }
-
     static func show(step: Int = 0) {
         if window == nil {
             let model = OnboardingModel()

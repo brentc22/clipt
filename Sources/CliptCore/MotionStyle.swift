@@ -56,16 +56,15 @@ public enum PanelMotion {
 
     /// ↩ to ⌘V: the row eases up to `pulseScale` over `pulseLead` and springs back while the
     /// panel closes over `pasteCloseDuration`;
-    /// the paste starts once the panel is off screen, or `pasteHandoff` after the close began,
-    /// whichever comes first.
+    /// the paste starts once the panel is off screen, or `pasteCloseDuration` after the close
+    /// began, whichever comes first.
     public static let pulseLead = 0.05
     public static let pulseScale = 1.02
     public static let pasteCloseDuration = 0.11
-    public static let pasteHandoff = 0.12
 
     /// Worst case from ↩ until `Paster.paste` starts.
     public static func pasteStartDelay(style: MotionStyle) -> Double {
-        (style.pulsesOnPaste ? pulseLead : 0) + min(pasteCloseDuration, pasteHandoff)
+        (style.pulsesOnPaste ? pulseLead : 0) + pasteCloseDuration
     }
 
     /// A held arrow key scrolls without animation: a scroll spring would queue up behind the repeat.

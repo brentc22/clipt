@@ -220,6 +220,7 @@ struct SettingsView: View {
         if let version = updater.available?.version { return "Clipt \(version) is out" }
         guard let last = updater.lastCheck else { return "Not checked yet" }
         let formatter = DateFormatter()
+        formatter.locale = PanelFormat.locale
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         formatter.doesRelativeDateFormatting = true
