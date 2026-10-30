@@ -64,11 +64,26 @@ func panelTests() {
         T.expect(!l.isExhausted, "replace re-derives")
     }
     T.test("placement: screen under the mouse, centered, upper part") {
-        let main = CGRect(x: 0, y: 0, width: 1440, height: 900), right = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+        let mainFrame = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let main = PanelPlacement.Screen(frame: mainFrame, visible: CGRect(x: 0, y: 70, width: 1440, height: 800))
+        let rightFrame = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+        let right = PanelPlacement.Screen(frame: rightFrame, visible: CGRect(x: 1440, y: 0, width: 1920, height: 1050))
         let f = PanelPlacement.frame(screens: [main, right], mouse: CGPoint(x: 2000, y: 500))
-        T.equal(f.midX, right.midX); T.equal(f.maxY, right.maxY - right.height * 0.22)
+        T.equal(f.midX, right.visible.midX); T.equal(f.maxY, right.visible.maxY - right.visible.height * 0.22)
         T.equal(f.size, PanelPlacement.size)
-        T.equal(PanelPlacement.frame(screens: [main], mouse: CGPoint(x: -500, y: -500)).midX, main.midX)
+        T.equal(PanelPlacement.frame(screens: [main], mouse: CGPoint(x: -500, y: -500)).midX, main.visible.midX)
+    }
+    T.test("placement: the mouse in a second display's menu bar or Dock picks that display") {
+        let main = PanelPlacement.Screen(frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+                                         visible: CGRect(x: 0, y: 70, width: 1440, height: 800))
+        let right = PanelPlacement.Screen(frame: CGRect(x: 1440, y: 0, width: 1920, height: 1080),
+                                          visible: CGRect(x: 1440, y: 0, width: 1920, height: 1050))
+        let menuBar = PanelPlacement.frame(screens: [main, right], mouse: CGPoint(x: 2000, y: 1070))
+        T.equal(menuBar.midX, right.visible.midX)
+        T.expect(right.visible.contains(menuBar), "inside the visible frame")
+        let dock = PanelPlacement.frame(screens: [main, right], mouse: CGPoint(x: 700, y: 20))
+        T.equal(dock.midX, main.visible.midX)
+        T.expect(main.visible.contains(dock), "inside the visible frame")
     }
     T.test("remove selects the row that took its place, else the one above") {
         var l = PanelList(pinned: [item(9, pinned: true)], recent: [item(1), item(2), item(3)])

@@ -123,7 +123,7 @@ final class PanelController: ObservableObject {
         // Never a stale target: nil unless a real non-Clipt app is frontmost.
         let front = NSWorkspace.shared.frontmostApplication
         pasteTarget = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
-        let screens = NSScreen.screens.map(\.visibleFrame)
+        let screens = NSScreen.screens.map { PanelPlacement.Screen(frame: $0.frame, visible: $0.visibleFrame) }
         let frame = PanelPlacement.frame(screens: screens, mouse: NSEvent.mouseLocation)
         if !panel.isVisible {
             panel.setFrame(frame.insetBy(dx: -Self.shadowMargin, dy: -Self.shadowMargin), display: false)
