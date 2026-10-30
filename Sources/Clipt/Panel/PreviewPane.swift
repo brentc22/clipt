@@ -5,12 +5,21 @@ import CliptCore
 struct PreviewPane: View {
     let content: PreviewContent?
     let meta: PreviewMeta?
+    /// The item shown; a new one crossfades in over the old.
+    let itemID: Int64?
+    let crossfade: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            box
-            if let meta { MetaGrid(meta: meta) }
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 12) {
+                box
+                if let meta { MetaGrid(meta: meta) }
+            }
+            .id(itemID)
+            .transition(.opacity)
         }
+        // Overrides the selection's spring for this pane: a crossfade, or nothing on a held key.
+        .animation(crossfade ? Motion.quick : nil, value: itemID)
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

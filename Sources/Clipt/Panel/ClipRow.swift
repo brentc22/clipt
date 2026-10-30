@@ -21,10 +21,7 @@ struct ClipRow: View, Equatable {
         .padding(.horizontal, 10)
         .frame(height: 30)
         .foregroundStyle(selected ? Color.white : Color.primary)
-        .background {
-            // The one highlight; Task 8 gives it a matchedGeometryEffect so it glides.
-            if selected { SelectionHighlight() }
-        }
+        // The highlight is drawn by the list (PanelView.rows), one view handed between rows.
         .contentShape(.rect)
     }
 
@@ -106,7 +103,7 @@ private struct RowThumbnail: View {
     }
 }
 
-/// The accent-colored rounded rect behind the selected row.
+/// The accent-colored rounded rect behind the selected row; the list glides it between rows.
 struct SelectionHighlight: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 9, style: .continuous)

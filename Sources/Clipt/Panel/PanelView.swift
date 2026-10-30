@@ -5,8 +5,11 @@ import CliptCore
 struct PanelView: View {
     @ObservedObject var model: PanelModel
     @FocusState private var searchFocused: Bool
+    @Namespace private var glide
 
     private static let topID = "panel-top"
+    private static let highlightID = "selection-highlight"
+    private static let rowHeight: CGFloat = 30
 
     var body: some View {
         GlassEffectContainer {
@@ -20,7 +23,10 @@ struct PanelView: View {
                     }
                     .frame(width: PanelPlacement.size.width * 0.52)
                     Divider().opacity(0.5)
-                    PreviewPane(content: model.preview, meta: model.meta)
+                    // A held ↓ swaps the preview outright (a crossfade per repeat would only stack up),
+                    // and so does the first fill while the panel opens.
+                    PreviewPane(content: model.preview, meta: model.meta, itemID: model.list.selection,
+                                crossfade: model.selectionCause != .keyRepeat && model.isSettledOpen)
                 }
                 .frame(maxHeight: .infinity)
                 Divider().opacity(0.6)
@@ -36,15 +42,16 @@ struct PanelView: View {
     // MARK: List
 
     private var list: some View {
-        ScrollViewReader { proxy in
+        let style = Motion.style
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
                     Color.clear.frame(height: 6).id(Self.topID)
                     let showHeaders = !model.list.pinned.isEmpty
-                    if showHeaders { SectionHeader(title: "Pinned") }
-                    rows(model.list.pinned)
-                    if showHeaders { SectionHeader(title: "Recent") }
-                    rows(model.list.recent)
+                    if showHeaders { SectionHeader(title: "Pinned").transition(.opacity) }
+                    rows(model.list.pinned, style: style)
+                    if showHeaders { SectionHeader(title: "Recent").transition(.opacity) }
+                    rows(model.list.recent, style: style)
                     Color.clear.frame(height: 6)
                 }
                 .padding(.horizontal, 6)
@@ -53,18 +60,44 @@ struct PanelView: View {
             .overlay { if model.hasLoaded && model.list.rows.isEmpty { emptyState } }
             .onChange(of: model.list.selection) { _, id in
                 guard let id else { return }
-                // The first row brings its section header along.
-                if id == model.list.rows.first?.id { proxy.scrollTo(Self.topID, anchor: .top) }
-                else { proxy.scrollTo(id) }
+                // A single step scrolls on the selection's spring; a held key, a reload or a
+                // show scrolls at once, so nothing queues behind the repeat.
+                let animated = model.selectionCause == .keyStep
+                    && PanelMotion.animatesScroll(isKeyRepeat: false, style: Motion.style)
+                var t = Transaction(animation: animated ? Motion.spring : nil)
+                t.disablesAnimations = !animated
+                withTransaction(t) {
+                    // The first row brings its section header along.
+                    if id == model.list.rows.first?.id { proxy.scrollTo(Self.topID, anchor: .top) }
+                    else { proxy.scrollTo(id) }
+                }
             }
         }
     }
 
-    private func rows(_ items: [ClipItem]) -> some View {
+    private func rows(_ items: [ClipItem], style: MotionStyle) -> some View {
         ForEach(items) { item in
-            ClipRow(item: item, selected: item.id == model.list.selection,
-                    hotkey: model.list.hotkeyNumber(for: item.id))
+            let selected = item.id == model.list.selection
+            let pulsed = model.pulse.id == item.id
+            ClipRow(item: item, selected: selected, hotkey: model.list.hotkeyNumber(for: item.id))
                 .equatable()
+                .background {
+                    // One highlight, handed from row to row: it glides instead of jumping.
+                    if selected {
+                        SelectionHighlight()
+                            .modifier(GlideModifier(id: Self.highlightID, namespace: glide, enabled: style.moves))
+                    }
+                }
+                // Every row runs the keyframes on a paste; only the pasted one applies them.
+                .keyframeAnimator(initialValue: 1.0, trigger: model.pulse) { row, scale in
+                    row.scaleEffect(pulsed ? scale : 1)
+                } keyframes: { _ in
+                    SpringKeyframe(1.02, duration: PanelMotion.pulseLead, spring: Motion.Spring.pop.swiftUI)
+                    SpringKeyframe(1.0, spring: Motion.Spring.pop.swiftUI)
+                }
+                // Pin and unpin: the row leaves one section and arrives in the other under one id, so it slides across.
+                .modifier(GlideModifier(id: item.id, namespace: glide, enabled: style.moves, properties: .position))
+                .transition(.listRow(height: Self.rowHeight, moves: style.moves))
                 .id(item.id)
                 .onTapGesture { model.paste(id: item.id, plainText: false) }
         }
@@ -138,7 +171,7 @@ struct PanelView: View {
             return .ignored
         }
         switch action {
-        case .move(let d): model.move(by: d)
+        case .move(let d): model.move(by: d, repeating: isRepeat)
         case .paste(let plain): model.pasteSelected(plainText: plain)
         case .pasteHotkey(let n): model.paste(hotkey: n)
         case .togglePin: model.togglePin()

@@ -1,5 +1,7 @@
 import AppKit
 import Combine
+import QuartzCore
+import SwiftUI
 import CliptCore
 
 /// The panel's state. Data comes from `History`; the view only reads this and calls methods.
@@ -21,10 +23,17 @@ final class PanelModel: ObservableObject {
     @Published private(set) var hasLoaded = false
     /// Bumped on every show; the view focuses the search field when it changes.
     @Published private(set) var focusRequest = 0
+    /// Bumped on each paste; the row with `pulse.id` plays its pulse when it changes.
+    @Published private(set) var pulse = PastePulse(id: nil, count: 0)
+    /// What last moved the selection. Read by the view while it updates for that move:
+    /// a held key must not animate the scroll or crossfade the preview.
+    private(set) var selectionCause = SelectionCause.other
 
     /// Set by the controller: the app to paste into, read before `close` clears it.
     var pasteTarget: () -> NSRunningApplication? = { nil }
     var close: () -> Void = {}
+    /// Closes the panel for a paste and runs the closure once focus is back in the target.
+    var closeForPaste: (@escaping () -> Void) -> Void = { $0() }
 
     private var debounceTask: Task<Void, Never>?
     private var reloadTask: Task<Void, Never>?
@@ -43,6 +52,11 @@ final class PanelModel: ObservableObject {
     /// Bumped on every show and hide, so a paste that waited for results can tell the panel closed meanwhile.
     private var session = 0
     private var pastePending = false
+    /// A paste is under way: the pulse and close are running and a second ↩ must not paste again.
+    private var pasting = false
+    /// When this session's panel went on screen, and whether its first load is in.
+    private var shownAt: CFTimeInterval?
+    private var initialLoadLanded = false
     private var cancellables: Set<AnyCancellable> = []
 
     init() {
@@ -69,6 +83,10 @@ final class PanelModel: ObservableObject {
     func willShow() {
         session += 1
         pastePending = false
+        pasting = false
+        shownAt = CACurrentMediaTime()
+        initialLoadLanded = false
+        selectionCause = .other
         debounceTask?.cancel()
         // Assigning the same value does not schedule a reload (didSet compares).
         query = ""
@@ -83,6 +101,7 @@ final class PanelModel: ObservableObject {
     /// Row thumbnails stay in their byte-bounded cache, so they don't flicker on the next open.
     func didHide() {
         session += 1
+        shownAt = nil
         reloadDue = false
         debounceTask?.cancel()
         reloadTask?.cancel(); reloadTask = nil
@@ -139,7 +158,10 @@ final class PanelModel: ObservableObject {
             self.loadedQuery = q
             self.loadedFilter = f
             self.reloadTask = nil
-            self.list = next
+            self.selectionCause = .other
+            // The first load of a show lands as is; later changes (a copy arriving, a pin, a search) reflow.
+            self.withListAnimation { self.list = next }
+            self.initialLoadLanded = true
             self.hasLoaded = true
         }
     }
@@ -155,6 +177,17 @@ final class PanelModel: ObservableObject {
     }
 
     private var isSettled: Bool { !reloadDue && reloadTask == nil }
+
+    /// The panel is on screen, its first load is in and it has finished opening: changes may animate.
+    var isSettledOpen: Bool {
+        PanelMotion.animatesListChanges(visible: shownAt != nil, initialLoadLanded: initialLoadLanded,
+                                        secondsSinceShow: shownAt.map { CACurrentMediaTime() - $0 } ?? 0)
+    }
+
+    /// Runs `change` under `Motion.spring` only once the panel is open and settled.
+    private func withListAnimation(_ change: () -> Void) {
+        if isSettledOpen { withAnimation(Motion.spring, change) } else { change() }
+    }
 
     private func listDidChange() {
         if list.selection != previewLoader.itemID {
@@ -175,14 +208,22 @@ final class PanelModel: ObservableObject {
             let more = await History.shared.recent(filter: f, limit: PanelList.pageSize, offset: offset)
             guard let self, gen == self.generation else { return }
             self.pageTask = nil
+            self.selectionCause = .other
             self.list.appendPage(more)
         }
     }
 
     // MARK: Actions
 
-    func move(by delta: Int) { list.moveSelection(by: delta) }
-    func select(_ id: Int64) { list.select(id) }
+    /// The highlight glides on a spring that retargets; a held key gets the stiff one.
+    func move(by delta: Int, repeating: Bool) {
+        selectionCause = repeating ? .keyRepeat : .keyStep
+        withAnimation(Motion.selection(repeating: repeating)) { list.moveSelection(by: delta) }
+    }
+    func select(_ id: Int64) {
+        selectionCause = .other
+        list.select(id)
+    }
 
     /// ↩ right after typing must paste from the results for what was typed, not from the
     /// list still on screen: resolve the row only once the list has caught up.
@@ -211,11 +252,22 @@ final class PanelModel: ObservableObject {
         }
     }
 
-    /// Target first: hiding clears it.
+    /// Target first: hiding clears it. The row pulses, the panel closes, and the paste starts
+    /// as soon as the panel is off screen (at most `PanelMotion.pasteStartDelay` after ↩).
     func paste(id: Int64, plainText: Bool) {
+        guard !pasting else { return }
+        pasting = true
         let target = pasteTarget()
-        close()
-        Task { await Paster.paste(itemID: id, plainText: plainText, into: target) }
+        let closeAndPaste = { [weak self] in
+            guard let self else { return }
+            self.closeForPaste { Task { await Paster.paste(itemID: id, plainText: plainText, into: target) } }
+        }
+        guard Motion.style.pulsesOnPaste else { return closeAndPaste() }
+        withAnimation(nil) { pulse = PastePulse(id: id, count: pulse.count + 1) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + PanelMotion.pulseLead) {
+            // Hidden meanwhile (focus moved away): closeForPaste pastes at once, as it always did.
+            MainActor.assumeIsolated { closeAndPaste() }
+        }
     }
 
     func togglePin() {
@@ -226,7 +278,8 @@ final class PanelModel: ObservableObject {
     /// Gone from the list at once; the store catches up and the revision reload confirms it.
     func deleteSelected() {
         guard let id = list.selection else { return }
-        list.remove(id)
+        selectionCause = .other
+        withListAnimation { list.remove(id) }
         History.shared.delete(id)
     }
 
@@ -243,4 +296,14 @@ final class PanelModel: ObservableObject {
         Prefs.shared.capturePaused = false
         History.shared.refreshCaptureState()
     }
+}
+
+/// Which row should pulse for the latest paste; `count` makes each paste a new value.
+struct PastePulse: Equatable {
+    let id: Int64?
+    let count: Int
+}
+
+enum SelectionCause {
+    case keyStep, keyRepeat, other
 }

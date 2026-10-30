@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import CliptCore
 
 /// A small Liquid Glass HUD near the bottom-center of the active screen.
 @MainActor
@@ -32,12 +33,14 @@ enum Toast {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         hosting.frame = CGRect(x: pad, y: pad, width: size.width, height: size.height)
         let container = NSView(frame: CGRect(origin: .zero, size: frame.size))
+        container.wantsLayer = true
         container.addSubview(hosting)
         p.contentView = container
-        p.alphaValue = 0
+        let style = Motion.style
+        // Animations first, then on screen: the first frame shown is the first frame of the pop.
+        Motion.present(p, from: style.moves ? 0.9 : 1, spring: .pop, fade: style.moves ? 0.15 : MotionStyle.fadeDuration)
         p.orderFrontRegardless()
         panel = p
-        fade(p, to: 1, duration: 0.15)
 
         let lifetime: Double = action == nil ? 2.5 : 5
         DispatchQueue.main.asyncAfter(deadline: .now() + lifetime) {
@@ -48,15 +51,10 @@ enum Toast {
     private static func dismiss() {
         guard let p = panel else { return }
         panel = nil
-        fade(p, to: 0, duration: 0.25) { p.orderOut(nil) }
-    }
-
-    /// Plain fades only, which is also what Reduce Motion asks for.
-    private static func fade(_ p: NSPanel, to alpha: CGFloat, duration: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? min(duration, 0.1) : duration
-            p.animator().alphaValue = alpha
-        }, completionHandler: { if let completion { Task { @MainActor in completion() } } })
+        let style = Motion.style
+        Motion.dismiss(p, to: style.moves ? 0.96 : 1, duration: style.moves ? 0.22 : MotionStyle.fadeDuration) {
+            p.orderOut(nil)
+        }
     }
 
     private static func activeScreen() -> NSScreen {
