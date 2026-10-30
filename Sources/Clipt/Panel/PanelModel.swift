@@ -266,9 +266,10 @@ final class PanelModel: ObservableObject {
         guard PanelMotion.allowsPaste(isClosing: isClosing(), isPasting: pasting) else { return }
         pasting = true
         let target = pasteTarget()
+        let kind = list.rows.first { $0.id == id }?.kind ?? .text
         let closeAndPaste = { [weak self] in
             guard let self else { return }
-            self.closeForPaste { Task { await Paster.paste(itemID: id, plainText: plainText, into: target) } }
+            self.closeForPaste { Task { await Paster.paste(itemID: id, kind: kind, plainText: plainText, into: target) } }
         }
         guard Motion.style.pulsesOnPaste else { return closeAndPaste() }
         withAnimation(nil) { pulse = PastePulse(id: id, count: pulse.count + 1) }

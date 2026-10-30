@@ -7,7 +7,7 @@ import CliptCore
 enum Paster {
     static let copiedMessage = "Copied — press ⌘V to paste"
 
-    static func paste(itemID: Int64, plainText: Bool, into target: NSRunningApplication?) async {
+    static func paste(itemID: Int64, kind: ClipKind, plainText: Bool, into target: NSRunningApplication?) async {
         let all = await History.shared.representations(of: itemID)
         let reps = PastePlan.representations(all, plainText: plainText)
         guard !reps.isEmpty else {
@@ -19,8 +19,10 @@ enum Paster {
         let route = PastePlan.route(hasAccessibility: AXIsProcessTrusted(),
                                     targetPID: target?.processIdentifier,
                                     targetIsRunning: target.map { !$0.isTerminated } ?? false,
-                                    ownPID: ProcessInfo.processInfo.processIdentifier)
-        guard write(reps, itemID: itemID) else {
+                                    ownPID: ProcessInfo.processInfo.processIdentifier,
+                                    targetBundleID: target?.bundleIdentifier,
+                                    kind: PastePlan.pasteKind(kind, writing: reps))
+        guard write(reps, to: .general, itemID: itemID) else {
             Toast.show("Couldn't paste", symbol: "exclamationmark.triangle")
             return
         }
@@ -37,14 +39,18 @@ enum Paster {
         }
     }
 
-    private static func write(_ reps: [Representation], itemID: Int64) -> Bool {
-        let item = NSPasteboardItem()
-        for rep in reps { item.setData(rep.data, forType: NSPasteboard.PasteboardType(rep.type)) }
-        let pb = NSPasteboard.general
+    /// One pasteboard item per file (see `PastePlan.pasteboardItems`), in one write.
+    /// `itemID` nil writes without claiming it as Clipt's own (probes on a private pasteboard).
+    static func write(_ reps: [Representation], to pb: NSPasteboard, itemID: Int64?) -> Bool {
+        let items = PastePlan.pasteboardItems(reps).map { group in
+            let item = NSPasteboardItem()
+            for rep in group { item.setData(rep.data, forType: NSPasteboard.PasteboardType(rep.type)) }
+            return item
+        }
         pb.clearContents()
-        guard pb.writeObjects([item]) else { return false }
+        guard pb.writeObjects(items) else { return false }
         // Same main-actor turn as the write, so the monitor cannot tick in between.
-        History.shared.didWriteOwn(changeCount: pb.changeCount, itemID: itemID)
+        if let itemID { History.shared.didWriteOwn(changeCount: pb.changeCount, itemID: itemID) }
         return true
     }
 
