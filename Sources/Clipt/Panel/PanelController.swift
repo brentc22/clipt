@@ -43,6 +43,7 @@ final class PanelController: ObservableObject {
         }
         model.pasteTarget = { [weak self] in self?.pasteTarget }
         model.close = { [weak self] in self?.hide(animated: true) }
+        model.isClosing = { [weak self] in self?.isClosing ?? false }
         model.closeForPaste = { [weak self] then in
             if let self { self.hideForPaste(then: then) } else { then() }
         }

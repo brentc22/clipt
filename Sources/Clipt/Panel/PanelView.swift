@@ -92,7 +92,9 @@ struct PanelView: View {
                 .keyframeAnimator(initialValue: 1.0, trigger: model.pulse) { row, scale in
                     row.scaleEffect(pulsed ? scale : 1)
                 } keyframes: { _ in
-                    SpringKeyframe(1.02, duration: PanelMotion.pulseLead, spring: Motion.Spring.pop.swiftUI)
+                    // Up: a cubic that lands exactly on 1.02 by the time the close starts (a 0.38 s
+                    // spring cut at 50 ms would barely leave 1). Back: the pop spring, carrying that speed.
+                    CubicKeyframe(PanelMotion.pulseScale, duration: PanelMotion.pulseLead)
                     SpringKeyframe(1.0, spring: Motion.Spring.pop.swiftUI)
                 }
                 // Pin and unpin: the row leaves one section and arrives in the other under one id, so it slides across.

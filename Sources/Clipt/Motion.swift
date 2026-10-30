@@ -15,10 +15,6 @@ enum Motion {
     }
     static var reduced: Bool { !style.moves }
 
-    /// Fast start, long soft landing: reads as a spring without overshooting.
-    static let settle = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
-    /// Leaving: picks up speed, so the eye isn't asked to follow it out.
-    static let exit = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
 
     /// A spring in SwiftUI's terms: `response` is roughly how long it takes, `bounce` 0 settles
     /// without overshoot, 0.2 lands with a visible little give.
@@ -59,12 +55,11 @@ enum Motion {
     static func prewarm() {
         _ = style
         _ = springAnimation("transform", from: nil, to: nil, .arrive)
-        _ = CABasicAnimation(keyPath: "opacity")
     }
 
     // MARK: Windows
 
-    /// Brings `window`'s content in: alpha 0 → 1 and, unless reduced, scale 0.96 → 1 on the
+    /// Brings the panel in: window alpha 0 → 1 and, unless reduced, scale 0.96 → 1 on the
     /// `arrive` spring. Call right before ordering the window front, in the same turn, so the
     /// first frame on screen is already the first frame of the animation. Visibility never waits on it.
     static func open(_ panel: NSPanel) {
@@ -72,7 +67,7 @@ enum Motion {
         present(panel, from: style.openScale, spring: .arrive, fade: style.openFadeDuration)
     }
 
-    /// Takes `window`'s content out — alpha to 0 and, unless reduced, scale to 0.98 on the
+    /// Takes the panel out — window alpha to 0 and, unless reduced, scale to 0.98 on the
     /// `leave` spring — then calls `completion`, which orders it out. Also called if the
     /// animation is cut short by a later `open`; the caller tells the two apart.
     static func close(_ panel: NSPanel, duration: TimeInterval? = nil, completion: @escaping @MainActor () -> Void) {
@@ -80,62 +75,50 @@ enum Motion {
         dismiss(panel, to: style.closeScale, duration: duration ?? style.closeDuration, completion: completion)
     }
 
-    /// The general form of `open`; the toast uses it with its own scale and spring.
+    /// The general form of `open`; the toast uses it with its own scale and spring. The fade is
+    /// the window's `alphaValue`, composited by the window server, so Liquid Glass's backdrop
+    /// fades as one piece; the scale is on the content layer, in the render server.
     static func present(_ window: NSWindow, from scale: Double, spring: Spring, fade: TimeInterval) {
-        guard let layer = contentLayer(window) else { return }
-        // Interrupting a close: start from where it is, not from scratch, so nothing flickers.
-        let running = !(layer.animationKeys() ?? []).isEmpty
-        let fromOpacity = running ? (layer.presentation()?.opacity ?? 0) : 0
-        let fromTransform = running ? (layer.presentation()?.transform ?? scaled(layer, scale)) : scaled(layer, scale)
-        layer.removeAllAnimations()
+        // Already on screen means a close is being interrupted: start from where it is, so nothing flickers.
+        let interrupting = window.isVisible
+        if !interrupting { window.alphaValue = 0 }
+        WindowFade.run(window, to: 1, duration: fade, ease: .settle, completion: nil)
 
+        guard let layer = contentLayer(window) else { return }
+        let fromTransform = interrupting ? (layer.presentation()?.transform ?? CATransform3DIdentity) : scaled(layer, scale)
+        layer.removeAllAnimations()
+        guard scale != 1 || !CATransform3DIsIdentity(fromTransform) else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let alpha = CABasicAnimation(keyPath: "opacity")
-        alpha.fromValue = fromOpacity
-        alpha.toValue = 1
-        alpha.duration = fade
-        alpha.timingFunction = settle
-        layer.add(alpha, forKey: "fade")
-        if scale != 1 || !CATransform3DIsIdentity(fromTransform) {
-            layer.add(springAnimation("transform", from: NSValue(caTransform3D: fromTransform),
-                                      to: NSValue(caTransform3D: CATransform3DIdentity), spring), forKey: "scale")
-        }
+        layer.add(springAnimation("transform", from: NSValue(caTransform3D: fromTransform),
+                                  to: NSValue(caTransform3D: CATransform3DIdentity), spring), forKey: "scale")
         CATransaction.commit()
     }
 
-    /// The general form of `close`.
+    /// The general form of `close`. `completion` runs when the fade ends, or when a later
+    /// `present` takes over the fade; the caller tells the two apart.
     static func dismiss(_ window: NSWindow, to scale: Double, duration: TimeInterval,
                         completion: @escaping @MainActor () -> Void) {
-        guard let layer = contentLayer(window) else { return completion() }
-        let fromOpacity = layer.presentation()?.opacity ?? 1
+        WindowFade.run(window, to: 0, duration: duration, ease: .exit, completion: completion)
+
+        guard scale != 1, let layer = contentLayer(window) else { return }
         let fromTransform = layer.presentation()?.transform ?? CATransform3DIdentity
         layer.removeAllAnimations()
-
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // Runs on main once both animations end, or are removed by a later `present`.
-        CATransaction.setCompletionBlock { Task { @MainActor in completion() } }
-        let alpha = CABasicAnimation(keyPath: "opacity")
-        alpha.fromValue = fromOpacity
-        alpha.toValue = 0
-        alpha.duration = duration
-        alpha.timingFunction = exit
-        hold(alpha)
-        layer.add(alpha, forKey: "fade")
-        if scale != 1 {
-            let shrink = springAnimation("transform", from: NSValue(caTransform3D: fromTransform),
-                                         to: NSValue(caTransform3D: scaled(layer, scale)), .leave)
-            // Once alpha is 0 the rest of the spring is invisible: cut it there.
-            shrink.duration = duration
-            hold(shrink)
-            layer.add(shrink, forKey: "scale")
-        }
+        let shrink = springAnimation("transform", from: NSValue(caTransform3D: fromTransform),
+                                     to: NSValue(caTransform3D: scaled(layer, scale)), .leave)
+        // Once alpha is 0 the rest of the spring is invisible: cut it there.
+        shrink.duration = duration
+        hold(shrink)
+        layer.add(shrink, forKey: "scale")
         CATransaction.commit()
     }
 
-    /// Drops whatever `dismiss` left on the layer. Call after ordering the window out.
+    /// Drops whatever `dismiss` left: the layer's held scale and a fade still stepping. Call
+    /// after ordering the window out.
     static func reset(_ window: NSWindow) {
+        WindowFade.stop(window)
         contentLayer(window)?.removeAllAnimations()
     }
 
@@ -169,6 +152,75 @@ enum Motion {
         t.m41 = b.width * (0.5 - layer.anchorPoint.x) * (1 - s)
         t.m42 = b.height * (0.5 - layer.anchorPoint.y) * (1 - s)
         return t
+    }
+}
+
+/// One window's alpha fade, stepped on the display link along an `Ease` curve by elapsed time,
+/// so a busy frame catches up instead of stretching the fade, and the end (and `completion`)
+/// lands on time. AppKit's `animator().alphaValue` was not used: it sometimes skipped the fade
+/// and completed at once, which ordered the panel out without a close animation.
+@MainActor
+private final class WindowFade: NSObject {
+    static var running: [ObjectIdentifier: WindowFade] = [:]
+    weak var window: NSWindow?
+    let link: CADisplayLink
+    let from: CGFloat, to: CGFloat
+    let start: CFTimeInterval, duration: TimeInterval
+    let ease: Ease
+    var completion: (@MainActor () -> Void)?
+
+    private init(window: NSWindow, link: CADisplayLink, to: CGFloat, duration: TimeInterval, ease: Ease,
+                 completion: (@MainActor () -> Void)?) {
+        self.window = window
+        self.link = link
+        from = window.alphaValue
+        self.to = to
+        start = CACurrentMediaTime()
+        self.duration = duration
+        self.ease = ease
+        self.completion = completion
+    }
+
+    /// From the window's current alpha. A fade already running on it is taken over: it stops
+    /// where it is and its completion runs, as a superseded animation's would.
+    static func run(_ window: NSWindow, to alpha: CGFloat, duration: TimeInterval, ease: Ease,
+                    completion: (@MainActor () -> Void)?) {
+        stop(window)?()
+        guard duration > 0,
+              // Before the first orderFront the window has no screen: the main one's link still ticks.
+              let screen = window.screen ?? NSScreen.main else {
+            window.alphaValue = alpha
+            completion?()
+            return
+        }
+        let link = screen.displayLink(target: WindowFade.self, selector: #selector(WindowFade.tick))
+        running[ObjectIdentifier(window)] = WindowFade(window: window, link: link, to: alpha, duration: duration,
+                                                       ease: ease, completion: completion)
+        link.add(to: .main, forMode: .common)
+    }
+
+    /// Stops the window's fade where it is; returns its completion for the caller to run (or drop).
+    @discardableResult
+    static func stop(_ window: NSWindow) -> (@MainActor () -> Void)? {
+        guard let fade = running.removeValue(forKey: ObjectIdentifier(window)) else { return nil }
+        fade.link.invalidate()
+        return fade.completion
+    }
+
+    /// The link targets the class, which finds the fade by its link: a link holds its target
+    /// strongly, so targeting the fade would keep it alive after its window is gone.
+    @objc static func tick(_ link: CADisplayLink) {
+        guard let (key, fade) = running.first(where: { $0.value.link === link }) else { return link.invalidate() }
+        guard let window = fade.window else {
+            running.removeValue(forKey: key)
+            return link.invalidate()
+        }
+        let progress = (link.targetTimestamp - fade.start) / fade.duration
+        window.alphaValue = fade.from + (fade.to - fade.from) * fade.ease(progress)
+        guard progress >= 1 else { return }
+        running.removeValue(forKey: key)
+        link.invalidate()
+        fade.completion?()
     }
 }
 

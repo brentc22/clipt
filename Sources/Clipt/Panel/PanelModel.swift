@@ -34,6 +34,8 @@ final class PanelModel: ObservableObject {
     var close: () -> Void = {}
     /// Closes the panel for a paste and runs the closure once focus is back in the target.
     var closeForPaste: (@escaping () -> Void) -> Void = { $0() }
+    /// Set by the controller: the panel is on its way out (Esc, hotkey, focus loss, paste).
+    var isClosing: () -> Bool = { false }
 
     private var debounceTask: Task<Void, Never>?
     private var reloadTask: Task<Void, Never>?
@@ -180,13 +182,18 @@ final class PanelModel: ObservableObject {
 
     /// The panel is on screen, its first load is in and it has finished opening: changes may animate.
     var isSettledOpen: Bool {
-        PanelMotion.animatesListChanges(visible: shownAt != nil, initialLoadLanded: initialLoadLanded,
-                                        secondsSinceShow: shownAt.map { CACurrentMediaTime() - $0 } ?? 0)
+        PanelMotion.isSettledOpen(visible: shownAt != nil, initialLoadLanded: initialLoadLanded,
+                                  secondsSinceShow: secondsSinceShow)
     }
+    private var secondsSinceShow: Double { shownAt.map { CACurrentMediaTime() - $0 } ?? 0 }
 
-    /// Runs `change` under `Motion.spring` only once the panel is open and settled.
+    /// Runs `change` under `Motion.spring` only once the panel is open and settled, and never
+    /// in fades-only mode, where the change lands at once.
     private func withListAnimation(_ change: () -> Void) {
-        if isSettledOpen { withAnimation(Motion.spring, change) } else { change() }
+        let animates = PanelMotion.animatesListChanges(style: Motion.style, visible: shownAt != nil,
+                                                       initialLoadLanded: initialLoadLanded,
+                                                       secondsSinceShow: secondsSinceShow)
+        if animates { withAnimation(Motion.spring, change) } else { change() }
     }
 
     private func listDidChange() {
@@ -237,7 +244,7 @@ final class PanelModel: ObservableObject {
     }
 
     private func whenSettled(_ pick: @escaping (PanelModel) -> (Int64, Bool)?) {
-        guard !pastePending else { return }
+        guard !pastePending, PanelMotion.allowsPaste(isClosing: isClosing(), isPasting: pasting) else { return }
         if isSettled {
             if let (id, plain) = pick(self) { paste(id: id, plainText: plain) }
             return
@@ -255,7 +262,8 @@ final class PanelModel: ObservableObject {
     /// Target first: hiding clears it. The row pulses, the panel closes, and the paste starts
     /// as soon as the panel is off screen (at most `PanelMotion.pasteStartDelay` after ↩).
     func paste(id: Int64, plainText: Bool) {
-        guard !pasting else { return }
+        // Closing: the target is already cleared, so a paste now would write the pasteboard and go nowhere.
+        guard PanelMotion.allowsPaste(isClosing: isClosing(), isPasting: pasting) else { return }
         pasting = true
         let target = pasteTarget()
         let closeAndPaste = { [weak self] in
