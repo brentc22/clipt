@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         History.shared.start()
         PanelController.shared.start()
+        if !Prefs.shared.onboardingDone { Onboarding.show() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

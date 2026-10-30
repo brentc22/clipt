@@ -6,7 +6,6 @@ import CliptCore
 @MainActor
 enum Paster {
     static let copiedMessage = "Copied — press ⌘V to paste"
-    private static let accessibilityPane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
     static func paste(itemID: Int64, plainText: Bool, into target: NSRunningApplication?) async {
         let all = await History.shared.representations(of: itemID)
@@ -32,9 +31,7 @@ enum Paster {
             if await bringToFront(target) { postCommandV() }
             else { Toast.show(copiedMessage) }
         case .copyOnly(.noAccessibility):
-            Toast.show(copiedMessage, action: ("Turn on auto-paste…", {
-                if let url = URL(string: accessibilityPane) { NSWorkspace.shared.open(url) }
-            }))
+            Toast.show(copiedMessage, action: ("Turn on auto-paste…", { Onboarding.show(step: 0) }))
         case .copyOnly(.noTargetApp):
             Toast.show(copiedMessage)
         }
