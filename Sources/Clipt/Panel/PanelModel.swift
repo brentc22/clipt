@@ -197,13 +197,14 @@ final class PanelModel: ObservableObject {
     }
 
     private func listDidChange() {
-        if list.selection != previewLoader.itemID {
+        let visible = shownAt != nil
+        if PanelWork.loadsPreview(visible: visible, selection: list.selection, loadedID: previewLoader.itemID) {
             previewLoader.load(selectedItem) { [weak self] content, meta in
                 self?.preview = content
                 self?.meta = meta
             }
         }
-        if list.needsNextPage { loadNextPage() }
+        if PanelWork.pagesIn(visible: visible, needsNextPage: list.needsNextPage) { loadNextPage() }
     }
 
     private func loadNextPage() {

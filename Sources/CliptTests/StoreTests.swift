@@ -69,6 +69,15 @@ func storeTests() {
         try s.setRecognizedText("invoice 2026", for: img.id, hash: imageContent().primaryHash)
         T.equal(try s.search("invoice", filter: .images, limit: 50).recent.map(\.id), [img.id])
     }
+    T.test("insert says whether the row is new, so a re-copy skips OCR") {
+        let s = try ClipStore(directory: tmp())
+        let first = try s.insertResult(imageContent(), sourceBundleID: nil, sourceAppName: nil)
+        T.equal(first.isNew, true)
+        let again = try s.insertResult(imageContent(), sourceBundleID: nil, sourceAppName: nil)
+        T.equal(again.isNew, false)
+        T.equal(again.item.id, first.item.id)
+        T.equal(try s.insertResult(text("other"), sourceBundleID: nil, sourceAppName: nil).isNew, true)
+    }
     T.test("late OCR does not land on an item that reused the id") {
         let s = try ClipStore(directory: tmp())
         let img = try s.insert(imageContent(), sourceBundleID: nil, sourceAppName: nil)

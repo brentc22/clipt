@@ -86,3 +86,16 @@ public struct PanelList: Equatable, Sendable {
         return index >= recent.count - 10
     }
 }
+
+/// What the panel may do in response to a list change. While hidden (a revision reload
+/// after a copy), the list stays fresh for the next open, but nothing decodes an image,
+/// reads full text or pages in more rows.
+public enum PanelWork {
+    public static func loadsPreview(visible: Bool, selection: Int64?, loadedID: Int64?) -> Bool {
+        visible && selection != loadedID
+    }
+
+    public static func pagesIn(visible: Bool, needsNextPage: Bool) -> Bool {
+        visible && needsNextPage
+    }
+}

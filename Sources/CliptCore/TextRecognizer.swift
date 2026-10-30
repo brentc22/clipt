@@ -12,8 +12,10 @@ public enum TextRecognizer {
 
     /// All text in the image, top to bottom. Vision often returns one line in pieces
     /// (a label, then a value); pieces at the same height are joined left to right.
-    public static func text(in image: CGImage) async -> String {
-        joinRows(await recognize(image))
+    /// Synchronous and slow: the caller picks the thread (Clipt runs it on one serial,
+    /// utility-priority queue).
+    public static func text(in image: CGImage) -> String {
+        joinRows(recognize(image))
     }
 
     static func joinRows(_ lines: [Line]) -> String {
@@ -30,23 +32,20 @@ public enum TextRecognizer {
             .joined(separator: "\n")
     }
 
-    private static func recognize(_ image: CGImage) async -> [Line] {
-        // Background indexing: stay out of the way of the foreground app.
-        await Task.detached(priority: .utility) {
-            // Vision scales the whole image to its working size, so on a tall scrolling
-            // capture the text ends up too small to read. Tall images go in overlapping
-            // tiles; a line found twice in an overlap is kept once.
-            var found: [Line] = []
-            for tile in tiles(width: image.width, height: image.height) {
-                guard let piece = image.cropping(to: tile) else { continue }
-                for line in recognizeTile(piece) {
-                    let frame = line.frame.offsetBy(dx: 0, dy: tile.minY)
-                    let duplicate = found.contains { $0.text == line.text && $0.frame.intersects(frame) }
-                    if !duplicate { found.append(Line(text: line.text, frame: frame)) }
-                }
+    private static func recognize(_ image: CGImage) -> [Line] {
+        // Vision scales the whole image to its working size, so on a tall scrolling
+        // capture the text ends up too small to read. Tall images go in overlapping
+        // tiles; a line found twice in an overlap is kept once.
+        var found: [Line] = []
+        for tile in tiles(width: image.width, height: image.height) {
+            guard let piece = image.cropping(to: tile) else { continue }
+            for line in recognizeTile(piece) {
+                let frame = line.frame.offsetBy(dx: 0, dy: tile.minY)
+                let duplicate = found.contains { $0.text == line.text && $0.frame.intersects(frame) }
+                if !duplicate { found.append(Line(text: line.text, frame: frame)) }
             }
-            return found.sorted { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }
-        }.value
+        }
+        return found.sorted { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }
     }
 
     /// Tiles at most 1.5× as tall as wide (min 1000 px), overlapping by 80 px so no line

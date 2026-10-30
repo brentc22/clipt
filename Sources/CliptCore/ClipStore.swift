@@ -116,6 +116,13 @@ public final class ClipStore {
 
     @discardableResult
     public func insert(_ c: ClipContent, sourceBundleID: String?, sourceAppName: String?, at: Date = Date()) throws -> ClipItem {
+        try insertResult(c, sourceBundleID: sourceBundleID, sourceAppName: sourceAppName, at: at).item
+    }
+
+    /// Like `insert`, and says whether the row is new: a re-copy of an existing item only
+    /// bumps it, so work done once per item (OCR) is skipped.
+    public func insertResult(_ c: ClipContent, sourceBundleID: String?, sourceAppName: String?,
+                             at: Date = Date()) throws -> (item: ClipItem, isNew: Bool) {
         let find = try db.prepare("SELECT id FROM items WHERE hash = ?")
         try find.bind([.text(c.primaryHash)])
         let existing: Int64? = try find.step() ? find.int64(0) : nil
@@ -156,7 +163,7 @@ public final class ClipStore {
             }
         }
         guard let item = try item(id) else { throw SQLiteError(code: SQLITE_ERROR, message: "inserted item vanished") }
-        return item
+        return (item, existing == nil)
     }
 
     public func touch(_ id: Int64, at: Date = Date()) throws {

@@ -85,6 +85,13 @@ func panelTests() {
         T.equal(dock.midX, main.visible.midX)
         T.expect(main.visible.contains(dock), "inside the visible frame")
     }
+    T.test("hidden panel: no preview and no paging on a background reload") {
+        T.equal(PanelWork.loadsPreview(visible: false, selection: 4, loadedID: nil), false)
+        T.equal(PanelWork.loadsPreview(visible: true, selection: 4, loadedID: nil), true)
+        T.equal(PanelWork.loadsPreview(visible: true, selection: 4, loadedID: 4), false)
+        T.equal(PanelWork.pagesIn(visible: false, needsNextPage: true), false)
+        T.equal(PanelWork.pagesIn(visible: true, needsNextPage: true), true)
+    }
     T.test("remove selects the row that took its place, else the one above") {
         var l = PanelList(pinned: [item(9, pinned: true)], recent: [item(1), item(2), item(3)])
         l.select(2); l.remove(2); T.equal(l.selection, 3); T.equal(l.rows.map(\.id), [9, 1, 3])

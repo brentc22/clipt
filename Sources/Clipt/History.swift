@@ -126,27 +126,34 @@ final class History: ObservableObject {
         Task { [box] in
             let result: (id: Int64, hash: String, image: Data?)? = await box.run { store in
                 guard let content = ClipClassifier.content(from: snapshot) else { return nil }
-                let item = try store.insert(content, sourceBundleID: sourceBundleID, sourceAppName: sourceAppName)
+                let inserted = try store.insertResult(content, sourceBundleID: sourceBundleID, sourceAppName: sourceAppName)
                 try store.enforce(policy)
-                let image = content.kind == .image
+                // OCR once per item: a re-copy keeps the text found the first time.
+                let image = content.kind == .image && inserted.isNew
                     ? (content.representations.first { $0.type == PasteType.png } ?? content.representations.first { $0.type == PasteType.tiff })?.data
                     : nil
-                return (item.id, content.primaryHash, image)
+                return (inserted.item.id, content.primaryHash, image)
             } ?? nil
             self.bump()
             if let result, let data = result.image { self.recognize(data, for: result.id, hash: result.hash) }
         }
     }
 
-    /// OCR at utility priority; the text lands in the search index when it is done.
+    /// One OCR job at a time, first in first out, at utility priority, so a burst of
+    /// screenshots never runs several Vision requests side by side.
+    private static let ocrQueue = DispatchQueue(label: "com.brentc22.Clipt.ocr", qos: .utility)
+
+    /// The text lands in the search index when it is done.
     private func recognize(_ data: Data, for id: Int64, hash: String) {
-        Task.detached(priority: .utility) { [box] in
+        Self.ocrQueue.async { [box] in
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                   let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return }
-            let text = await TextRecognizer.text(in: image)
+            let text = TextRecognizer.text(in: image)
             guard !text.isEmpty else { return }
-            _ = await box.run { try $0.setRecognizedText(text, for: id, hash: hash) }
-            await self.bump()
+            Task {
+                _ = await box.run { try $0.setRecognizedText(text, for: id, hash: hash) }
+                await self.bump()
+            }
         }
     }
 
