@@ -101,6 +101,12 @@ final class History: ObservableObject {
     func clearHistory() { mutate { try $0.clearHistory() } }
     func touch(_ id: Int64) { mutate { try $0.touch(id) } }
 
+    /// Enforces the current retention policy now, e.g. after the user tightened it in Settings.
+    func applyRetention() {
+        let policy = Prefs.shared.retention
+        mutate { try $0.enforce(policy) }
+    }
+
     /// Called by the paster after it writes an item back, so the monitor bumps it
     /// instead of capturing the write as a new copy.
     func didWriteOwn(changeCount: Int, itemID: Int64) {
