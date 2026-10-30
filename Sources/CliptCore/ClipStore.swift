@@ -75,28 +75,31 @@ public final class ClipStore {
         }
         // After recovery the blobs belong to the kept-aside database; never sweep them.
         if !recovered { try sweepOrphans() }
-        try fillMissingPixelSizes()
     }
 
-    /// Images stored before version 2 have no pixel size: read it from their blob's header,
-    /// once. A row whose blob can't be read gets 0 × 0, so it isn't tried again.
-    private func fillMissingPixelSizes() throws {
+    /// Images stored before version 2 have no pixel size: reads it from the blob headers of
+    /// at most `limit` such rows and returns how many it did. The owner calls it after open,
+    /// one batch per job, until it returns 0; a failed or partial pass leaves the rest NULL
+    /// for the next call. A row whose blob can't be read gets 0 × 0, so it isn't tried again.
+    @discardableResult
+    public func fillMissingPixelSizes(limit: Int = 200) throws -> Int {
         let s = try db.prepare("""
             SELECT items.id, (SELECT blob FROM reps WHERE reps.item_id = items.id AND reps.type IN (?, ?) ORDER BY ord LIMIT 1)
-            FROM items WHERE items.kind = 'image' AND items.px_width IS NULL
+            FROM items WHERE items.kind = 'image' AND items.px_width IS NULL LIMIT ?
             """)
-        try s.bind([.text(PasteType.png), .text(PasteType.tiff)])
+        try s.bind([.text(PasteType.png), .text(PasteType.tiff), .int(Int64(limit))])
         var found: [(Int64, PixelSize?)] = []
         while try s.step() {
             found.append((s.int64(0), s.optText(1).flatMap { Thumbnailer.pixelSize(at: blobsDir.appendingPathComponent($0)) }))
         }
-        guard !found.isEmpty else { return }
+        guard !found.isEmpty else { return 0 }
         try db.transaction {
             for (id, size) in found {
                 try db.run("UPDATE items SET px_width = ?, px_height = ? WHERE id = ?",
                            [.int(Int64(size?.width ?? 0)), .int(Int64(size?.height ?? 0)), .int(id)])
             }
         }
+        return found.count
     }
 
     /// Deletes files in blobs/ and thumbs/ that no row references.
@@ -132,11 +135,14 @@ public final class ClipStore {
         var existing = Set<String>()
         let info = try db.prepare("PRAGMA table_info(items)")
         while try info.step() { existing.insert(info.text(1)) }
+        let version = try db.prepare("PRAGMA user_version")
+        let current = try version.step() ? version.int64(0) : 0
         try db.transaction {
             for column in ["px_width", "px_height"] where !existing.contains(column) {
                 try db.exec("ALTER TABLE items ADD COLUMN \(column) INTEGER NULL")
             }
-            try db.exec("PRAGMA user_version = 2")
+            // Never lowers a version a newer build wrote.
+            if current < 2 { try db.exec("PRAGMA user_version = 2") }
         }
         return db
     }

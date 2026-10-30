@@ -23,6 +23,8 @@ final class Database {
             throw SQLiteError(code: rc, message: msg)
         }
         handle = h
+        // Wait out a briefly held lock (another connection, a checkpoint) instead of failing at once.
+        sqlite3_busy_timeout(h, 2000)
     }
 
     deinit { sqlite3_close_v2(handle) }

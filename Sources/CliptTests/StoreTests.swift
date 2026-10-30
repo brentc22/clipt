@@ -142,43 +142,70 @@ func storeTests() {
         T.equal(try ClipStore(directory: dir).recent(filter: .images, limit: 5, offset: 0).first?.pixelSize,
                 PixelSize(width: 30, height: 20), "after reopening")
     }
-    T.test("a version 1 database gains pixel sizes on open, and survives an older build in between") {
+    T.test("a version 1 database gains pixel sizes after open, and survives an older build in between") {
         let dir = tmp()
-        let blobs = dir.appendingPathComponent("blobs"); let thumbs = dir.appendingPathComponent("thumbs")
-        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: thumbs, withIntermediateDirectories: true)
-        try imageData(width: 64, height: 48).write(to: blobs.appendingPathComponent("b1"))
-        let path = dir.appendingPathComponent("clipt.sqlite").path
-        func sql(_ statements: String) {
-            var db: OpaquePointer?
-            sqlite3_open(path, &db)
-            T.equal(sqlite3_exec(db, statements, nil, nil, nil), SQLITE_OK, "setup sql")
-            sqlite3_close(db)
-        }
-        // The version 1 schema, as shipped, with one image and one image whose blob is gone.
-        sql("""
-            CREATE TABLE items(id INTEGER PRIMARY KEY, hash TEXT UNIQUE, kind TEXT, preview TEXT, plain_text TEXT,
-                source_bundle TEXT, source_name TEXT, copied_at REAL, pinned_at REAL NULL, byte_size INTEGER, thumb TEXT NULL);
-            CREATE TABLE reps(item_id INTEGER, ord INTEGER, type TEXT, blob TEXT, size INTEGER);
-            CREATE VIRTUAL TABLE fts USING fts5(plain_text, ocr_text, tokenize='unicode61 remove_diacritics 2');
+        let v1 = V1Database(dir)
+        try v1.blob("b1", imageData(width: 64, height: 48))
+        v1.sql("""
             INSERT INTO items VALUES(1, 'h1', 'image', 'Image', NULL, NULL, NULL, 10, NULL, 100, NULL);
             INSERT INTO reps VALUES(1, 0, 'public.png', 'b1', 100);
             INSERT INTO items VALUES(2, 'h2', 'image', 'Image', NULL, NULL, NULL, 5, NULL, 100, NULL);
             INSERT INTO reps VALUES(2, 0, 'public.png', 'missing', 100);
-            PRAGMA user_version = 1;
             """)
         let s = try ClipStore(directory: dir)
-        let rows = try s.recent(filter: .all, limit: 5, offset: 0)
-        T.equal(rows.map(\.pixelSize), [PixelSize(width: 64, height: 48), nil])
-        T.equal(try s.recent(filter: .all, limit: 5, offset: 0).map(\.preview), ["Image", "Image"], "rows kept")
+        T.equal(try s.recent(filter: .all, limit: 5, offset: 0).map(\.pixelSize), [nil, nil], "open does no backfill")
+        T.equal(try s.fillMissingPixelSizes(), 2)
+        T.equal(try s.fillMissingPixelSizes(), 0, "idempotent")
+        T.equal(try s.recent(filter: .all, limit: 5, offset: 0).map(\.pixelSize), [PixelSize(width: 64, height: 48), nil])
+        T.equal(v1.userVersion, 2)
         // An older build opening it writes version 1 again; the columns stay and the next open must cope.
-        sql("PRAGMA user_version = 1;")
+        v1.sql("PRAGMA user_version = 1;")
         let again = try ClipStore(directory: dir)
         T.equal(try again.recent(filter: .all, limit: 5, offset: 0).first?.pixelSize, PixelSize(width: 64, height: 48))
-        var db: OpaquePointer?; sqlite3_open(path, &db)
-        var st: OpaquePointer?; sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &st, nil); sqlite3_step(st)
-        T.equal(sqlite3_column_int(st, 0), 2, "user_version")
-        sqlite3_finalize(st); sqlite3_close(db)
+        T.equal(v1.userVersion, 2)
+        // A newer build's version is never lowered.
+        v1.sql("PRAGMA user_version = 3;")
+        _ = try ClipStore(directory: dir)
+        T.equal(v1.userVersion, 3)
+    }
+    T.test("the store opens and backfills even when blobs are corrupt or unreadable") {
+        let dir = tmp()
+        let v1 = V1Database(dir)
+        try v1.blob("corrupt", Data("definitely not a png".utf8))
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("blobs/adir"), withIntermediateDirectories: true)
+        v1.sql("""
+            INSERT INTO items VALUES(1, 'h1', 'image', 'Image', NULL, NULL, NULL, 10, NULL, 100, NULL);
+            INSERT INTO reps VALUES(1, 0, 'public.png', 'corrupt', 100);
+            INSERT INTO items VALUES(2, 'h2', 'image', 'Image', NULL, NULL, NULL, 5, NULL, 100, NULL);
+            INSERT INTO reps VALUES(2, 0, 'public.png', 'adir', 100);
+            INSERT INTO items VALUES(3, 'h3', 'image', 'Image', NULL, NULL, NULL, 1, NULL, 100, NULL);
+            """)
+        let s = try ClipStore(directory: dir)
+        T.equal(try s.fillMissingPixelSizes(), 3)
+        T.equal(try s.fillMissingPixelSizes(), 0, "unreadable rows are not retried")
+        T.equal(try s.recent(filter: .all, limit: 5, offset: 0).map(\.pixelSize), [nil, nil, nil])
+        T.equal(try s.count(), 3, "rows kept")
+    }
+    T.test("the backfill works in batches until everything is filled") {
+        let dir = tmp()
+        let v1 = V1Database(dir)
+        try v1.blob("b", imageData(width: 7, height: 5))
+        var rows = ""
+        for i in 1...25 {
+            rows += "INSERT INTO items VALUES(\(i), 'h\(i)', 'image', 'Image', NULL, NULL, NULL, \(i), NULL, 100, NULL);\n"
+            rows += "INSERT INTO reps VALUES(\(i), 0, 'public.png', 'b', 100);\n"
+        }
+        v1.sql(rows)
+        let s = try ClipStore(directory: dir)
+        var batches: [Int] = []
+        while true {
+            let n = try s.fillMissingPixelSizes(limit: 10)
+            if n == 0 { break }
+            batches.append(n)
+        }
+        T.equal(batches, [10, 10, 5])
+        T.expect(try s.recent(filter: .images, limit: 50, offset: 0).allSatisfy { $0.pixelSize == PixelSize(width: 7, height: 5) },
+                 "every row filled")
     }
     T.test("re-copy with a different secondary representation adds no blobs") {
         let dir = tmp(); let s = try ClipStore(directory: dir)
@@ -214,5 +241,43 @@ func storeTests() {
         let r = Date(); _ = try s.recent(filter: .all, limit: 50, offset: 0)
         let t3 = Date().timeIntervalSince(r); print("    first page: \(String(format: "%.2f", t3 * 1000)) ms")
         T.lessThan(t3, 0.01, "first page")
+    }
+}
+
+/// A database in the version 1 schema, as shipped, built by hand.
+private struct V1Database {
+    let dir: URL
+    var path: String { dir.appendingPathComponent("clipt.sqlite").path }
+
+    init(_ dir: URL) {
+        self.dir = dir
+        for sub in ["blobs", "thumbs"] {
+            try? FileManager.default.createDirectory(at: dir.appendingPathComponent(sub), withIntermediateDirectories: true)
+        }
+        sql("""
+            CREATE TABLE items(id INTEGER PRIMARY KEY, hash TEXT UNIQUE, kind TEXT, preview TEXT, plain_text TEXT,
+                source_bundle TEXT, source_name TEXT, copied_at REAL, pinned_at REAL NULL, byte_size INTEGER, thumb TEXT NULL);
+            CREATE TABLE reps(item_id INTEGER, ord INTEGER, type TEXT, blob TEXT, size INTEGER);
+            CREATE VIRTUAL TABLE fts USING fts5(plain_text, ocr_text, tokenize='unicode61 remove_diacritics 2');
+            PRAGMA user_version = 1;
+            """)
+    }
+
+    func blob(_ name: String, _ data: Data) throws {
+        try data.write(to: dir.appendingPathComponent("blobs").appendingPathComponent(name))
+    }
+
+    func sql(_ statements: String) {
+        var db: OpaquePointer?
+        sqlite3_open(path, &db)
+        T.equal(sqlite3_exec(db, statements, nil, nil, nil), SQLITE_OK, "setup sql")
+        sqlite3_close(db)
+    }
+
+    var userVersion: Int32 {
+        var db: OpaquePointer?; sqlite3_open(path, &db)
+        var st: OpaquePointer?; sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &st, nil); sqlite3_step(st)
+        defer { sqlite3_finalize(st); sqlite3_close(db) }
+        return sqlite3_column_int(st, 0)
     }
 }

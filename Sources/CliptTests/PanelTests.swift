@@ -43,7 +43,8 @@ func panelTests() {
     T.test("appendPage extends recent and drives needsNextPage") {
         var l = PanelList(pinned: [], recent: (1...50).map { item(Int64($0)) })
         T.expect(!l.needsNextPage, "top of a list needs no page")
-        l.select(45); T.expect(l.needsNextPage, "within 10 of the end")
+        l.select(35); T.expect(!l.needsNextPage, "16 from the end: not yet")
+        l.select(36); T.expect(l.needsNextPage, "within 15 of the end")
         l.appendPage((51...100).map { item(Int64($0)) })
         T.equal(l.recent.count, 100); T.expect(!l.needsNextPage, "more rows below now")
     }

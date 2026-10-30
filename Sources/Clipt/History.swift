@@ -61,6 +61,11 @@ final class History: ObservableObject {
         Task { [box] in
             _ = await box.run { try $0.enforce(policy) }
             self.bump()
+            // Images from before schema version 2: a batch per store job, so captures and
+            // panel loads interleave. A failure (logged by `run`) leaves the rest for next launch.
+            var filled = 0
+            while let n = await box.run({ try $0.fillMissingPixelSizes(limit: 200) }), n > 0 { filled += n }
+            if filled > 0 { self.bump() }
         }
         let m = PasteboardMonitor(history: self)
         monitor = m

@@ -79,11 +79,11 @@ public struct PanelList: Equatable, Sendable {
         return recent[n - 1]
     }
 
-    /// The selection is within 10 rows of the end of `recent` and more pages may exist.
+    /// The selection is within 15 rows of the end of `recent` and more pages may exist.
     public var needsNextPage: Bool {
         guard !isExhausted else { return false }
         let index = recent.firstIndex { $0.id == selection } ?? -1
-        return index >= recent.count - 10
+        return index >= recent.count - 15
     }
 }
 
