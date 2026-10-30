@@ -19,6 +19,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private let openItem = NSMenuItem()
     private let pauseItem = NSMenuItem()
+    private let updatesItem = NSMenuItem()
     private var cancellable: AnyCancellable?
 
     private override init() {
@@ -45,10 +46,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         settings.target = self
         menu.addItem(settings)
 
-        // Task 11 wires the updater; until then the item is present but disabled.
-        let updates = NSMenuItem(title: "Check for Updates…", action: nil, keyEquivalent: "")
-        updates.isEnabled = false
-        menu.addItem(updates)
+        updatesItem.target = self
+        updatesItem.action = #selector(checkForUpdates)
+        menu.addItem(updatesItem)
 
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Clipt", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -72,6 +72,13 @@ final class MenuBar: NSObject, NSMenuDelegate {
         openItem.keyEquivalent = combo.keyEquivalent
         openItem.keyEquivalentModifierMask = combo.modifiers
         pauseItem.title = Prefs.shared.capturePaused ? "Resume Capture" : "Pause Capture"
+        if let version = Updater.shared.available?.version {
+            updatesItem.title = "Update Available: Clipt \(version)…"
+            updatesItem.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
+        } else {
+            updatesItem.title = "Check for Updates…"
+            updatesItem.image = nil
+        }
     }
 
     @objc private func openPanel() { PanelController.shared.show() }
@@ -85,6 +92,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
     @objc private func clearHistory() { Self.confirmClearHistory() }
 
     @objc private func openSettings() { SettingsWindow.show() }
+
+    @objc private func checkForUpdates() {
+        if Updater.shared.available != nil { Updater.shared.offerAvailable() } else { Updater.shared.check(userInitiated: true) }
+    }
 
     /// Shared with Settings. Pinned items survive.
     static func confirmClearHistory() {

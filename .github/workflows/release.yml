@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      KEYCHAIN: ${{ runner.temp }}/clipt-signing.keychain-db
+    steps:
+      - uses: actions/checkout@v4
+
+      # Releases are signed with the same "Clipt Self-Signed" identity as local builds, so
+      # an installed copy accepts the update (and keeps its Accessibility grant). The
+      # identity lives in two secrets: see "Development" in the README.
+      - name: Import the signing identity
+        env:
+          CLIPT_SIGNING_P12: ${{ secrets.CLIPT_SIGNING_P12 }}
+          CLIPT_SIGNING_PASSWORD: ${{ secrets.CLIPT_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$CLIPT_SIGNING_P12" ] || [ -z "$CLIPT_SIGNING_PASSWORD" ]; then
+            echo "::error::CLIPT_SIGNING_P12 and CLIPT_SIGNING_PASSWORD must be set; releases are never ad-hoc signed."
+            exit 1
+          fi
+          keychain_password="$(uuidgen)"
+          echo "$CLIPT_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/clipt-signing.p12"
+          security create-keychain -p "$keychain_password" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$keychain_password" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/clipt-signing.p12" -k "$KEYCHAIN" -P "$CLIPT_SIGNING_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$KEYCHAIN"
+          # Put it first in the search list, next to the login keychain.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/clipt-signing.p12"
+          security find-identity -p codesigning "$KEYCHAIN"
+
+      - name: Test
+        run: swift run CliptTests
+
+      - name: Build universal app
+        run: make zip CLIPT_SIGN_IDENTITY="Clipt Self-Signed"
+
+      - name: Check the signing identity
+        run: |
+          codesign --verify --deep --strict Clipt.app
+          codesign -d -r- Clipt.app 2>&1 | grep -q "certificate leaf" \
+            || { echo "::error::Clipt.app is not signed with a certificate (ad-hoc?)"; exit 1; }
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" Clipt.zip \
+            --title "Clipt ${GITHUB_REF_NAME#v}" \
+            --notes-file <(awk '/^## /{n++} n==1' CHANGELOG.md)
+
+      - name: Remove the keychain
+        if: always()
+        run: security delete-keychain "$KEYCHAIN" || true

@@ -137,6 +137,7 @@ final class SettingsModel: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject var panel: PanelController
+    @ObservedObject private var updater = Updater.shared
 
     private static let itemLabels: [Int?: String] = [200: "200 items", 1000: "1,000 items", 5000: "5,000 items", nil: "Unlimited"]
     private static let ageLabels: [TimeInterval?: String] = [86_400: "1 day", 604_800: "7 days", 2_592_000: "30 days", nil: "Never"]
@@ -190,7 +191,17 @@ struct SettingsView: View {
             Section("About") {
                 LabeledContent("Version", value: CliptVersion.current)
                 Link("GitHub", destination: SettingsModel.repositoryURL)
-                Button("Check for Updates…") {}.disabled(true)   // Task 11
+                Toggle("Look for new versions every day", isOn: $updater.automaticallyChecks)
+                LabeledContent {
+                    if let version = updater.available?.version {
+                        Button("Install Clipt \(version.description)…") { updater.offerAvailable() }
+                    } else {
+                        Button("Check Now") { updater.check(userInitiated: true) }.disabled(updater.isBusy)
+                    }
+                } label: {
+                    Text(Self.updateStatus(updater)).foregroundStyle(.secondary)
+                }
+                caption("Asks GitHub whether there's a newer Clipt. Nothing about you or your clipboard is sent.", warning: false)
             }
         }
         .formStyle(.grouped)
@@ -201,6 +212,18 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refreshLaunchAtLogin()
         }
+    }
+
+    /// "Checked today at 15:42", or the version that is waiting.
+    private static func updateStatus(_ updater: Updater) -> String {
+        if updater.isBusy { return "Checking…" }
+        if let version = updater.available?.version { return "Clipt \(version) is out" }
+        guard let last = updater.lastCheck else { return "Not checked yet" }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        formatter.doesRelativeDateFormatting = true
+        return "Checked \(formatter.string(from: last))"
     }
 
     private func caption(_ text: String, warning: Bool) -> some View {

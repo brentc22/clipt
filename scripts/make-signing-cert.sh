@@ -21,8 +21,10 @@
 #                                           base64, for the GitHub secret CLIPT_SIGNING_P12
 #                                           (the password "clipt" goes in CLIPT_SIGNING_PASSWORD)
 #
-# Safe to re-run: it does not create a second identity. With --export it needs a
-# fresh certificate, so exporting only works on the run that creates it.
+# Safe to re-run: it does not create a second identity. With --export it writes the
+# .p12 only on the run that creates the identity. If the identity already exists, the
+# script prints the Keychain Access steps to export it by hand instead: `security export`
+# cannot pick one identity out of the keychain (it dumps all of them), so it is not used.
 # To remove it: Keychain Access > login > "Clipt Self-Signed", delete.
 
 set -eu
@@ -46,7 +48,17 @@ fi
 if security find-identity -p codesigning 2>/dev/null | grep -q "$NAME"; then
     echo "identity \"$NAME\" already exists -- nothing to do"
     if [ -n "$EXPORT_DIR" ]; then
-        echo "--export needs a freshly created identity; delete \"$NAME\" from the keychain and re-run" >&2
+        cat >&2 <<EOF2
+--export only works on the run that creates the identity, and "$NAME" already exists.
+Export it from Keychain Access instead:
+  1. Open Keychain Access, select the "login" keychain and the "My Certificates" tab.
+  2. Select "$NAME" (expand it: the private key must be under it).
+  3. File > Export Items..., format "Personal Information Exchange (.p12)", save as
+     $EXPORT_DIR/clipt-signing.p12 with the password "$PASSWORD".
+  4. base64 -i $EXPORT_DIR/clipt-signing.p12 | pbcopy
+     and paste it into the GitHub secret CLIPT_SIGNING_P12. The password goes into
+     CLIPT_SIGNING_PASSWORD. Delete the .p12 afterwards.
+EOF2
         exit 1
     fi
     exit 0
