@@ -94,7 +94,8 @@ brew install --cask brentc22/tap/clipt
 Or download `Clipt.zip` from the [latest release](../../releases/latest), unzip, and move
 `Clipt.app` to `/Applications`. Requires macOS 26 Tahoe or later. Universal binary.
 
-Clipt isn't notarized yet, so macOS blocks the first launch. Right-click → **Open**, or:
+Clipt isn't notarized yet, so macOS blocks the first launch. Open System Settings →
+Privacy & Security and click **Open Anyway**, or clear the quarantine flag:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Clipt.app
@@ -120,8 +121,9 @@ also shows in the menu bar menu, and Settings → About has **Check Now** and a 
 the daily check.
 
 Before swapping anything in, Clipt checks that the download is `com.brentc22.Clipt`, is the
-version the release promised, has an intact code signature, and is **signed by the same
-identity as the copy you are running** (its designated requirement must match exactly). An
+version the release promised, comes as a single `Clipt.app` in the archive, and that
+macOS accepts its code signature against **the designated requirement of the copy you are
+running** (same bundle id, same certificate). An
 update signed by anyone else is refused. If any check fails, or `/Applications` isn't
 writable, Clipt offers the download page instead.
 
@@ -149,7 +151,7 @@ drops the Accessibility grant. `make bundle CLIPT_SIGN_IDENTITY=-` exists for CI
 
 Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`: it imports the signing
 identity into a temporary keychain, runs the tests, builds and signs the universal app,
-checks that it is signed with a certificate, and publishes `Clipt.zip` with the newest
+checks that it is signed with the identity pinned in `Resources/designated-requirement.txt`, and publishes `Clipt.zip` with the newest
 section of `CHANGELOG.md` as the notes.
 
 The identity comes from two repository secrets:

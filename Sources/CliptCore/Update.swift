@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// A `major.minor.patch` version. Tags like `v0.4.0` parse too; missing parts count as 0.
 public struct AppVersion: Comparable, CustomStringConvertible, Sendable {
@@ -40,8 +41,17 @@ public struct Release: Decodable, Sendable {
     public var version: AppVersion? { AppVersion(tagName) }
 
     /// The app zip: `Clipt.zip` (or `Clipt-0.5.0.zip`).
+    /// Only https URLs on GitHub's own hosts qualify; anything else (a tampered feed, say)
+    /// yields nil and the caller sends the user to the release page instead.
     public func zipURL(appName: String) -> URL? {
-        assets.first { $0.name.hasPrefix(appName) && $0.name.hasSuffix(".zip") }?.browserDownloadURL
+        assets.first { $0.name.hasPrefix(appName) && $0.name.hasSuffix(".zip") && Self.isTrustedDownload($0.browserDownloadURL) }?
+            .browserDownloadURL
+    }
+
+    public static let trustedDownloadHosts: Set<String> = ["github.com", "objects.githubusercontent.com"]
+
+    public static func isTrustedDownload(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && url.host.map { trustedDownloadHosts.contains($0.lowercased()) } == true
     }
 
     public static func decode(_ data: Data) throws -> Release {
@@ -86,24 +96,29 @@ public enum UpdateError: LocalizedError, Equatable {
 
 /// Unpacks and checks a downloaded update, and swaps it in once the app has quit.
 public enum UpdateInstaller {
-    /// Unzips `zip` into `workDir` and returns the app inside it, after checking it is
-    /// the same app (bundle id), the promised version, intact (code signature) and signed
-    /// by the same identity as the running app.
+    /// Unzips `zip` into `workDir` and returns the app inside it, after checking that the
+    /// archive holds exactly one top-level entry, a real directory named `Clipt.app`, that it
+    /// is the same app (bundle id) and the promised version, and that macOS itself accepts
+    /// its code signature against `requirement`.
     ///
-    /// `requiredRequirement` is the running app's designated requirement
-    /// (`designatedRequirement(of:)`). For a build signed with the Clipt Self-Signed
-    /// certificate it pins the bundle id and the certificate, so an update signed with
-    /// anything else (including ad-hoc) is refused. Apps never get re-signed: that would
-    /// hide tampering, and the signature is what makes the Accessibility grant survive.
+    /// `requirement` is the running app's designated requirement (`runningRequirement()`).
+    /// For a build signed with the Clipt Self-Signed certificate it pins the bundle id and
+    /// the certificate, so an update signed with anything else (including ad-hoc) is
+    /// refused. The decision is made by Security.framework on the code itself, never by
+    /// parsing tool output, which the downloaded app's file names could forge. Apps never
+    /// get re-signed: that would hide tampering.
     public static func prepare(zip: URL, in workDir: URL, bundleID: String, version: AppVersion,
-                               requiredRequirement: String) throws -> URL {
+                               requiredRequirement requirement: SecRequirement) throws -> URL {
         let unpacked = workDir.appendingPathComponent("unpacked")
         try? FileManager.default.removeItem(at: unpacked)
         try FileManager.default.createDirectory(at: unpacked, withIntermediateDirectories: true)
         try run("/usr/bin/ditto", ["-x", "-k", zip.path, unpacked.path])
 
         let contents = try FileManager.default.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil)
-        guard let app = contents.first(where: { $0.pathExtension == "app" }) else { throw UpdateError.noAppInArchive }
+        guard contents.count == 1, let app = contents.first, app.lastPathComponent == appBundleName,
+              (try? app.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]))
+                  .map({ $0.isDirectory == true && $0.isSymbolicLink != true }) == true
+        else { throw UpdateError.noAppInArchive }
 
         let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))
         let foundID = info?["CFBundleIdentifier"] as? String
@@ -112,52 +127,79 @@ public enum UpdateInstaller {
         guard foundVersion.flatMap(AppVersion.init) == version else {
             throw UpdateError.wrongVersion(found: foundVersion, expected: version.description)
         }
-        do {
-            try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
-        } catch {
-            throw UpdateError.invalidSignature(error.localizedDescription)
+
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code else {
+            throw UpdateError.invalidSignature("couldn't read the code signature")
         }
-        guard designatedRequirement(of: app) == requiredRequirement else {
-            throw UpdateError.invalidSignature("signed by a different identity")
+        let flags = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSCheckNestedCode)
+        let status = SecStaticCodeCheckValidity(code, flags, requirement)
+        switch status {
+        case errSecSuccess: return app
+        case errSecCSReqFailed: throw UpdateError.invalidSignature("signed by a different identity")
+        default: throw UpdateError.invalidSignature("code validation failed (\(status))")
         }
-        return app
     }
 
-    /// The designated requirement out of `codesign -d -r-` output (the text after
-    /// `designated => `), or nil when there is none.
-    public static func designatedRequirement(fromCodesignOutput output: String) -> String? {
-        let marker = "designated => "
-        // Newer codesign prints it as a comment: `# designated => ...`.
-        for raw in output.split(whereSeparator: \.isNewline) {
-            let line = raw.hasPrefix("# ") ? raw.dropFirst(2) : raw
-            guard line.hasPrefix(marker) else { continue }
-            let requirement = line.dropFirst(marker.count).trimmingCharacters(in: .whitespaces)
-            return requirement.isEmpty ? nil : requirement
-        }
-        return nil
+    public static let appBundleName = "Clipt.app"
+
+    /// The designated requirement of the running app, or nil when it isn't signed with a
+    /// certificate (ad-hoc builds, `swift run`): then there is no identity to compare an
+    /// update against and the caller should send the user to the download page.
+    public static func runningRequirement() -> SecRequirement? {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode
+        else { return nil }
+        return certificateRequirement(of: staticCode)
     }
 
-    /// The designated requirement of the code at `url`, read with `codesign -d -r-`.
-    public static func designatedRequirement(of url: URL) -> String? {
-        guard let output = try? capture("/usr/bin/codesign", ["-d", "-r-", url.path]) else { return nil }
-        return designatedRequirement(fromCodesignOutput: output)
+    /// The designated requirement of the code at `url`, if it is certificate-based.
+    public static func designatedRequirement(of url: URL) -> SecRequirement? {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code else { return nil }
+        return certificateRequirement(of: code)
     }
 
-    /// A shell script that waits for `pid` to exit, moves `newApp` over `destination`
-    /// (restoring the old copy if that fails) and relaunches it with `--after-update`, so the
-    /// new copy can tell it was just installed. Run it detached, then quit.
+    private static func certificateRequirement(of code: SecStaticCode) -> SecRequirement? {
+        var requirement: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(code, [], &requirement) == errSecSuccess, let requirement,
+              requirementText(requirement)?.contains("certificate") == true
+        else { return nil }
+        return requirement
+    }
+
+    /// For display and for tests only; never for a security decision about downloaded code.
+    public static func requirementText(_ requirement: SecRequirement) -> String? {
+        var text: CFString?
+        guard SecRequirementCopyString(requirement, [], &text) == errSecSuccess else { return nil }
+        return text as String?
+    }
+
+    public static func requirement(fromText text: String) -> SecRequirement? {
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess else { return nil }
+        return requirement
+    }
+
+    /// A shell script that waits for `pid` to exit and moves `newApp` over `destination`
+    /// (restoring the old copy if that fails), then launches whichever copy is in place:
+    /// the new one, or the old one again after a failed swap, so the user is never left
+    /// without Clipt. Run it detached, then quit.
     public static func swapScript(pid: Int32, newApp: URL, destination: URL, relaunch: Bool = true) -> String {
         let backup = newApp.deletingLastPathComponent().appendingPathComponent("previous.app")
+        let open = relaunch ? "open \(quote(destination.path))" : ":"
         return """
         while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done
         rm -rf \(quote(backup.path))
-        mv \(quote(destination.path)) \(quote(backup.path)) || exit 1
+        if ! mv \(quote(destination.path)) \(quote(backup.path)); then \(open); exit 1; fi
         if ! mv \(quote(newApp.path)) \(quote(destination.path)); then
-          mv \(quote(backup.path)) \(quote(destination.path)); exit 1
+          mv \(quote(backup.path)) \(quote(destination.path)); \(open); exit 1
         fi
         xattr -dr com.apple.quarantine \(quote(destination.path)) 2>/dev/null
         rm -rf \(quote(backup.path))
-        \(relaunch ? "open \(quote(destination.path)) --args --after-update" : "")
+        \(open)
         """
     }
 
@@ -174,23 +216,5 @@ public enum UpdateInstaller {
         guard process.terminationStatus == 0 else {
             throw UpdateError.command((tool as NSString).lastPathComponent, status: process.terminationStatus)
         }
-    }
-
-    /// Runs `tool` and returns its standard output and standard error together (codesign
-    /// writes to either, depending on the flag).
-    static func capture(_ tool: String, _ arguments: [String]) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tool)
-        process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw UpdateError.command((tool as NSString).lastPathComponent, status: process.terminationStatus)
-        }
-        return String(decoding: data, as: UTF8.self)
     }
 }

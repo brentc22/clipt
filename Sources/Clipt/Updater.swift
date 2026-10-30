@@ -141,8 +141,7 @@ final class Updater: ObservableObject {
         // ad-hoc build, or an /Applications we can't write to there is nothing to compare
         // with or nowhere to install: hand over to the browser.
         guard destination.pathExtension == "app", parentIsWritable,
-              let requirement = UpdateInstaller.designatedRequirement(of: destination),
-              requirement.contains("certificate leaf"),
+              UpdateInstaller.runningRequirement() != nil,
               let zipURL = release.zipURL(appName: appName) else {
             NSWorkspace.shared.open(release.htmlURL)
             return
@@ -160,8 +159,11 @@ final class Updater: ObservableObject {
 
                 let bundleID = Bundle.main.bundleIdentifier ?? "com.brentc22.Clipt"
                 let newApp = try await Task.detached {
-                    try UpdateInstaller.prepare(zip: zip, in: workDir, bundleID: bundleID,
-                                                version: version, requiredRequirement: requirement)
+                    guard let requirement = UpdateInstaller.runningRequirement() else {
+                        throw UpdateError.invalidSignature("this copy of Clipt isn't signed with a certificate")
+                    }
+                    return try UpdateInstaller.prepare(zip: zip, in: workDir, bundleID: bundleID,
+                                                       version: version, requiredRequirement: requirement)
                 }.value
 
                 let script = UpdateInstaller.swapScript(pid: ProcessInfo.processInfo.processIdentifier,

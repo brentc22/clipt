@@ -19,6 +19,14 @@ jobs:
       # Releases are signed with the same "Clipt Self-Signed" identity as local builds, so
       # an installed copy accepts the update (and keeps its Accessibility grant). The
       # identity lives in two secrets: see "Development" in the README.
+      - name: Check the tag matches the app version
+        run: |
+          plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          if [ "${GITHUB_REF_NAME#v}" != "$plist_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match CFBundleShortVersionString $plist_version"
+            exit 1
+          fi
+
       - name: Import the signing identity
         env:
           CLIPT_SIGNING_P12: ${{ secrets.CLIPT_SIGNING_P12 }}
@@ -49,8 +57,10 @@ jobs:
       - name: Check the signing identity
         run: |
           codesign --verify --deep --strict Clipt.app
-          codesign -d -r- Clipt.app 2>&1 | grep -q "certificate leaf" \
-            || { echo "::error::Clipt.app is not signed with a certificate (ad-hoc?)"; exit 1; }
+          # The signer is pinned in the repo: a different certificate would make every
+          # installed copy refuse the update.
+          codesign --verify --strict -R "=$(cat Resources/designated-requirement.txt)" Clipt.app \
+            || { echo "::error::Clipt.app is not signed with the pinned identity (Resources/designated-requirement.txt)"; exit 1; }
 
       - name: Publish release
         env:
