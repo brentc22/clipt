@@ -24,6 +24,11 @@ final class PanelWindow: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+    /// The hotkey panel keeps working while an alert (update, clear history) is up.
+    override var worksWhenModal: Bool {
+        get { true }
+        set {}
+    }
 
     override func cancelOperation(_ sender: Any?) { onCancel?() }
 }
