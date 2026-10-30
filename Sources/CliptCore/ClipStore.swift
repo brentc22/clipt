@@ -13,13 +13,15 @@ public struct ClipItem: Sendable, Identifiable, Equatable {
     public let byteSize: Int
     /// Images only, at most 256 px PNG.
     public let thumbnailURL: URL?
+    /// Images only: the original's size. Nil when unknown (not an image, or unreadable).
+    public let pixelSize: PixelSize?
 
     public init(id: Int64, kind: ClipKind, preview: String, sourceBundleID: String?, sourceAppName: String?,
-                copiedAt: Date, isPinned: Bool, byteSize: Int, thumbnailURL: URL?) {
+                copiedAt: Date, isPinned: Bool, byteSize: Int, thumbnailURL: URL?, pixelSize: PixelSize? = nil) {
         self.id = id; self.kind = kind; self.preview = preview
         self.sourceBundleID = sourceBundleID; self.sourceAppName = sourceAppName
         self.copiedAt = copiedAt; self.isPinned = isPinned; self.byteSize = byteSize
-        self.thumbnailURL = thumbnailURL
+        self.thumbnailURL = thumbnailURL; self.pixelSize = pixelSize
     }
 }
 
@@ -47,7 +49,7 @@ public final class ClipStore {
     private let blobsDir: URL
     private let thumbsDir: URL
 
-    private static let columns = "items.id, items.kind, items.preview, items.source_bundle, items.source_name, items.copied_at, items.pinned_at, items.byte_size, items.thumb"
+    private static let columns = "items.id, items.kind, items.preview, items.source_bundle, items.source_name, items.copied_at, items.pinned_at, items.byte_size, items.thumb, items.px_width, items.px_height"
 
     public init(directory: URL) throws {
         let fm = FileManager.default
@@ -73,6 +75,28 @@ public final class ClipStore {
         }
         // After recovery the blobs belong to the kept-aside database; never sweep them.
         if !recovered { try sweepOrphans() }
+        try fillMissingPixelSizes()
+    }
+
+    /// Images stored before version 2 have no pixel size: read it from their blob's header,
+    /// once. A row whose blob can't be read gets 0 × 0, so it isn't tried again.
+    private func fillMissingPixelSizes() throws {
+        let s = try db.prepare("""
+            SELECT items.id, (SELECT blob FROM reps WHERE reps.item_id = items.id AND reps.type IN (?, ?) ORDER BY ord LIMIT 1)
+            FROM items WHERE items.kind = 'image' AND items.px_width IS NULL
+            """)
+        try s.bind([.text(PasteType.png), .text(PasteType.tiff)])
+        var found: [(Int64, PixelSize?)] = []
+        while try s.step() {
+            found.append((s.int64(0), s.optText(1).flatMap { Thumbnailer.pixelSize(at: blobsDir.appendingPathComponent($0)) }))
+        }
+        guard !found.isEmpty else { return }
+        try db.transaction {
+            for (id, size) in found {
+                try db.run("UPDATE items SET px_width = ?, px_height = ? WHERE id = ?",
+                           [.int(Int64(size?.width ?? 0)), .int(Int64(size?.height ?? 0)), .int(id)])
+            }
+        }
     }
 
     /// Deletes files in blobs/ and thumbs/ that no row references.
@@ -102,8 +126,18 @@ public final class ClipStore {
             CREATE INDEX IF NOT EXISTS reps_item ON reps(item_id);
             CREATE INDEX IF NOT EXISTS reps_blob ON reps(blob);
             CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(plain_text, ocr_text, tokenize='unicode61 remove_diacritics 2');
-            PRAGMA user_version = 1;
             """)
+        // Version 2 adds the image pixel size. Checked by column, not only by version: a
+        // version 1 build run in between sets the version back but keeps the columns.
+        var existing = Set<String>()
+        let info = try db.prepare("PRAGMA table_info(items)")
+        while try info.step() { existing.insert(info.text(1)) }
+        try db.transaction {
+            for column in ["px_width", "px_height"] where !existing.contains(column) {
+                try db.exec("ALTER TABLE items ADD COLUMN \(column) INTEGER NULL")
+            }
+            try db.exec("PRAGMA user_version = 2")
+        }
         return db
     }
 
@@ -137,21 +171,28 @@ public final class ClipStore {
             var blobNames: [String] = []
             for rep in c.representations { blobNames.append(try writeBlob(rep.data)) }
             var thumbName: String?
+            var pixelSize: PixelSize?
             if c.kind == .image,
-               let src = c.representations.first(where: { $0.type == PasteType.png || $0.type == PasteType.tiff }),
-               let png = Thumbnailer.png(from: src.data) {
-                let name = c.primaryHash + ".png"
-                let url = thumbsDir.appendingPathComponent(name)
-                if !FileManager.default.fileExists(atPath: url.path) { try png.write(to: url, options: .atomic) }
-                thumbName = name
+               let src = c.representations.first(where: { $0.type == PasteType.png || $0.type == PasteType.tiff }) {
+                pixelSize = Thumbnailer.pixelSize(of: src.data)
+                if let png = Thumbnailer.png(from: src.data) {
+                    let name = c.primaryHash + ".png"
+                    let url = thumbsDir.appendingPathComponent(name)
+                    if !FileManager.default.fileExists(atPath: url.path) { try png.write(to: url, options: .atomic) }
+                    thumbName = name
+                }
             }
+            // Images always get a size (0 × 0 when unreadable), so the backfill on open skips them.
+            let pixels: (Bind, Bind) = c.kind == .image
+                ? (.int(Int64(pixelSize?.width ?? 0)), .int(Int64(pixelSize?.height ?? 0))) : (.null, .null)
             id = try db.transaction {
                 try db.run("""
-                    INSERT INTO items(hash, kind, preview, plain_text, source_bundle, source_name, copied_at, pinned_at, byte_size, thumb)
-                    VALUES(?,?,?,?,?,?,?,NULL,?,?)
+                    INSERT INTO items(hash, kind, preview, plain_text, source_bundle, source_name, copied_at, pinned_at, byte_size, thumb,
+                                      px_width, px_height)
+                    VALUES(?,?,?,?,?,?,?,NULL,?,?,?,?)
                     """, [.text(c.primaryHash), .text(c.kind.rawValue), .text(c.preview), .optText(c.plainText),
                           .optText(sourceBundleID), .optText(sourceAppName), .double(at.timeIntervalSince1970),
-                          .int(Int64(c.byteSize)), .optText(thumbName)])
+                          .int(Int64(c.byteSize)), .optText(thumbName), pixels.0, pixels.1])
                 let id = db.lastInsertRowID
                 for (i, rep) in c.representations.enumerated() {
                     try db.run("INSERT INTO reps(item_id, ord, type, blob, size) VALUES(?,?,?,?,?)",
@@ -309,7 +350,8 @@ public final class ClipStore {
                 sourceBundleID: s.optText(3), sourceAppName: s.optText(4),
                 copiedAt: Date(timeIntervalSince1970: s.double(5)), isPinned: !s.isNull(6),
                 byteSize: Int(s.int64(7)),
-                thumbnailURL: s.optText(8).map { thumbsDir.appendingPathComponent($0) }))
+                thumbnailURL: s.optText(8).map { thumbsDir.appendingPathComponent($0) },
+                pixelSize: s.int64(9) > 0 && s.int64(10) > 0 ? PixelSize(width: Int(s.int64(9)), height: Int(s.int64(10))) : nil))
         }
         return out
     }

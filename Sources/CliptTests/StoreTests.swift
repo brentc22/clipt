@@ -3,6 +3,7 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 import CliptCore
+import SQLite3
 
 func tmp() -> URL {
     let u = FileManager.default.temporaryDirectory.appendingPathComponent("clipt-test-\(UUID().uuidString)")
@@ -14,17 +15,23 @@ func text(_ s: String) -> ClipContent {
     ClipClassifier.content(from: snap([("public.utf8-plain-text", s)]))!
 }
 
-func imageContent() -> ClipContent {
-    let ctx = CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 0,
+func imageData(width: Int = 4, height: Int = 4, type: UTType = .png, orientation: Int? = nil) -> Data {
+    let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                         space: CGColorSpaceCreateDeviceRGB(),
                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
-    ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+    ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
     let out = NSMutableData()
-    let dest = CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil)!
-    CGImageDestinationAddImage(dest, ctx.makeImage()!, nil)
+    let dest = CGImageDestinationCreateWithData(out, type.identifier as CFString, 1, nil)!
+    let props = orientation.map { [kCGImagePropertyOrientation: $0] as CFDictionary }
+    CGImageDestinationAddImage(dest, ctx.makeImage()!, props)
     CGImageDestinationFinalize(dest)
-    return ClipClassifier.content(from: .init(representations: [.init(type: PasteType.png, data: out as Data)]))!
+    return out as Data
+}
+
+func imageContent(width: Int = 4, height: Int = 4) -> ClipContent {
+    let data = imageData(width: width, height: height)
+    return ClipClassifier.content(from: .init(representations: [.init(type: PasteType.png, data: data)]))!
 }
 
 func storeTests() {
@@ -120,6 +127,58 @@ func storeTests() {
         T.equal(try s.search("findme", filter: .all, limit: 5).recent.count, 0)
         let img = try s.insert(imageContent(), sourceBundleID: nil, sourceAppName: nil)
         T.expect(img.thumbnailURL != nil, "thumbnail present")
+    }
+    T.test("pixel size: read from the header, rotation applied") {
+        T.equal(Thumbnailer.pixelSize(of: imageData(width: 30, height: 20)), PixelSize(width: 30, height: 20))
+        T.equal(Thumbnailer.pixelSize(of: imageData(width: 30, height: 20, type: .jpeg, orientation: 6)),
+                PixelSize(width: 20, height: 30), "EXIF 6 turns it a quarter")
+        T.expect(Thumbnailer.pixelSize(of: Data("not an image".utf8)) == nil, "not an image")
+    }
+    T.test("images store their pixel size at insert; other kinds have none") {
+        let dir = tmp(); let s = try ClipStore(directory: dir)
+        let img = try s.insert(imageContent(width: 30, height: 20), sourceBundleID: nil, sourceAppName: nil)
+        T.equal(img.pixelSize, PixelSize(width: 30, height: 20))
+        T.equal(try s.insert(text("hi"), sourceBundleID: nil, sourceAppName: nil).pixelSize, nil)
+        T.equal(try ClipStore(directory: dir).recent(filter: .images, limit: 5, offset: 0).first?.pixelSize,
+                PixelSize(width: 30, height: 20), "after reopening")
+    }
+    T.test("a version 1 database gains pixel sizes on open, and survives an older build in between") {
+        let dir = tmp()
+        let blobs = dir.appendingPathComponent("blobs"); let thumbs = dir.appendingPathComponent("thumbs")
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: thumbs, withIntermediateDirectories: true)
+        try imageData(width: 64, height: 48).write(to: blobs.appendingPathComponent("b1"))
+        let path = dir.appendingPathComponent("clipt.sqlite").path
+        func sql(_ statements: String) {
+            var db: OpaquePointer?
+            sqlite3_open(path, &db)
+            T.equal(sqlite3_exec(db, statements, nil, nil, nil), SQLITE_OK, "setup sql")
+            sqlite3_close(db)
+        }
+        // The version 1 schema, as shipped, with one image and one image whose blob is gone.
+        sql("""
+            CREATE TABLE items(id INTEGER PRIMARY KEY, hash TEXT UNIQUE, kind TEXT, preview TEXT, plain_text TEXT,
+                source_bundle TEXT, source_name TEXT, copied_at REAL, pinned_at REAL NULL, byte_size INTEGER, thumb TEXT NULL);
+            CREATE TABLE reps(item_id INTEGER, ord INTEGER, type TEXT, blob TEXT, size INTEGER);
+            CREATE VIRTUAL TABLE fts USING fts5(plain_text, ocr_text, tokenize='unicode61 remove_diacritics 2');
+            INSERT INTO items VALUES(1, 'h1', 'image', 'Image', NULL, NULL, NULL, 10, NULL, 100, NULL);
+            INSERT INTO reps VALUES(1, 0, 'public.png', 'b1', 100);
+            INSERT INTO items VALUES(2, 'h2', 'image', 'Image', NULL, NULL, NULL, 5, NULL, 100, NULL);
+            INSERT INTO reps VALUES(2, 0, 'public.png', 'missing', 100);
+            PRAGMA user_version = 1;
+            """)
+        let s = try ClipStore(directory: dir)
+        let rows = try s.recent(filter: .all, limit: 5, offset: 0)
+        T.equal(rows.map(\.pixelSize), [PixelSize(width: 64, height: 48), nil])
+        T.equal(try s.recent(filter: .all, limit: 5, offset: 0).map(\.preview), ["Image", "Image"], "rows kept")
+        // An older build opening it writes version 1 again; the columns stay and the next open must cope.
+        sql("PRAGMA user_version = 1;")
+        let again = try ClipStore(directory: dir)
+        T.equal(try again.recent(filter: .all, limit: 5, offset: 0).first?.pixelSize, PixelSize(width: 64, height: 48))
+        var db: OpaquePointer?; sqlite3_open(path, &db)
+        var st: OpaquePointer?; sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &st, nil); sqlite3_step(st)
+        T.equal(sqlite3_column_int(st, 0), 2, "user_version")
+        sqlite3_finalize(st); sqlite3_close(db)
     }
     T.test("re-copy with a different secondary representation adds no blobs") {
         let dir = tmp(); let s = try ClipStore(directory: dir)
