@@ -1,7 +1,7 @@
 import CoreGraphics
 
 public enum PanelPlacement {
-    public static let size = CGSize(width: 640, height: 404)
+    public static let size = CGSize(width: 540, height: 330)
 
     public struct Screen: Sendable, Equatable {
         /// The whole display, menu bar and Dock included: what the mouse is tested against.

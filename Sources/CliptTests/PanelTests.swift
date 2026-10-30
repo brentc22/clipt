@@ -71,6 +71,7 @@ func panelTests() {
         let f = PanelPlacement.frame(screens: [main, right], mouse: CGPoint(x: 2000, y: 500))
         T.equal(f.midX, right.visible.midX); T.equal(f.maxY, right.visible.maxY - right.visible.height * 0.22)
         T.equal(f.size, PanelPlacement.size)
+        T.equal(PanelPlacement.size, CGSize(width: 540, height: 330), "compact panel")
         T.equal(PanelPlacement.frame(screens: [main], mouse: CGPoint(x: -500, y: -500)).midX, main.visible.midX)
     }
     T.test("placement: the mouse in a second display's menu bar or Dock picks that display") {
@@ -113,14 +114,33 @@ func panelTests() {
         T.equal(PanelFormat.relative(now.addingTimeInterval(30), now: now), "just now", "clock skew")
         T.equal(PanelFormat.relative(now.addingTimeInterval(-4 * 86400), now: now), "4 days ago")
     }
-    T.test("type line") {
-        T.equal(PanelFormat.typeLine(kind: .link, characters: 36, byteSize: 36), "Link · 36 characters")
-        T.equal(PanelFormat.typeLine(kind: .text, characters: 1, byteSize: 1), "Text · 1 character")
-        T.equal(PanelFormat.typeLine(kind: .text, characters: 1204, byteSize: 1204), "Text · 1,204 characters")
-        T.equal(PanelFormat.typeLine(kind: .text, characters: nil, byteSize: 9), "Text")
-        T.equal(PanelFormat.typeLine(kind: .file, characters: nil, byteSize: 9, fileCount: 3), "Files · 3 items")
-        T.equal(PanelFormat.typeLine(kind: .file, characters: nil, byteSize: 9, fileCount: 1), "File")
-        T.equal(PanelFormat.typeLine(kind: .image, characters: nil, byteSize: 1_800_000), "Image · 1.8 MB")
+    T.test("image dimensions use a real multiplication sign") {
+        let d = PanelFormat.dimensions(PixelSize(width: 3024, height: 1964))
+        T.equal(d, "3024 \u{00D7} 1964")
+        T.equal(Array(d.unicodeScalars).map(\.value)[4...6].map { $0 }, [0x20, 0xD7, 0x20], "space, ×, space")
+        T.equal(PanelFormat.dimensions(PixelSize(width: 12000, height: 8)), "12000 × 8", "no grouping")
+    }
+    T.test("image rows show the pixel size instead of \"Image\"") {
+        T.equal(PanelFormat.rowText(kind: .image, preview: "Image", pixelSize: PixelSize(width: 1360, height: 888)), "1360 × 888")
+        T.equal(PanelFormat.rowText(kind: .image, preview: "Image", pixelSize: nil), "Image", "unknown size")
+        T.equal(PanelFormat.rowText(kind: .text, preview: "hello", pixelSize: PixelSize(width: 1, height: 1)), "hello")
+    }
+    T.test("one-line meta") {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func line(_ kind: ClipKind, chars: Int? = nil, bytes: Int = 9, files: Int? = nil, px: PixelSize? = nil,
+                  ago: TimeInterval = 5) -> String {
+            PanelFormat.metaLine(source: "Safari", copiedAt: now.addingTimeInterval(-ago), kind: kind, characters: chars,
+                                 byteSize: bytes, fileCount: files, pixelSize: px, now: now)
+        }
+        T.equal(line(.image, bytes: 2_400_000, px: PixelSize(width: 3024, height: 1964)), "Safari · just now · 3024 × 1964 · 2.4 MB")
+        T.equal(line(.image, bytes: 1_800_000), "Safari · just now · 1.8 MB", "size unknown")
+        T.equal(line(.link, chars: 36, ago: 120), "Safari · 2 min ago · 36 characters")
+        T.equal(line(.text, chars: 1), "Safari · just now · 1 character")
+        T.equal(line(.text, chars: 1204), "Safari · just now · 1,204 characters")
+        T.equal(line(.text), "Safari · just now", "still loading")
+        T.equal(line(.color), "Safari · just now")
+        T.equal(line(.file, files: 3), "Safari · just now · 3 items")
+        T.equal(line(.file, files: 1), "Safari · just now · 1 item")
     }
     T.test("UI numbers and dates stay English under a Dutch locale") {
         // This Mac runs nl_BE (it printed "1.204" and "1,8 MB" before the fix); pin a
@@ -128,9 +148,12 @@ func panelTests() {
         var nl = Calendar(identifier: .gregorian)
         nl.locale = Locale(identifier: "nl_BE")
         nl.timeZone = TimeZone(identifier: "UTC")!
-        T.equal(PanelFormat.typeLine(kind: .image, characters: nil, byteSize: 1_800_000), "Image · 1.8 MB")
-        T.equal(PanelFormat.typeLine(kind: .text, characters: 1204, byteSize: 1), "Text · 1,204 characters")
         let now = Date(timeIntervalSince1970: 1_800_000_000)   // 15 Jan 2027
+        T.equal(PanelFormat.metaLine(source: "Mail", copiedAt: now, kind: .image, characters: nil, byteSize: 1_800_000,
+                                     pixelSize: PixelSize(width: 3024, height: 1964), now: now, calendar: nl),
+                "Mail · just now · 3024 × 1964 · 1.8 MB")
+        T.equal(PanelFormat.metaLine(source: "Mail", copiedAt: now, kind: .text, characters: 1204, byteSize: 1,
+                                     now: now, calendar: nl), "Mail · just now · 1,204 characters")
         let old = now.addingTimeInterval(-10 * 86400)           // 5 Jan 2027
         T.equal(PanelFormat.relative(old, now: now, calendar: nl), "Jan 5")
         T.equal(PanelFormat.relative(old.addingTimeInterval(-400 * 86400), now: now, calendar: nl), "Dec 1, 2025")

@@ -20,7 +20,7 @@
 <p align="center"><code>brew install --cask brentc22/tap/clipt</code></p>
 
 <p align="center">
-  <img src="docs/panel.png" width="712" alt="Clipt's panel: a search field, pinned and recent items on the left, a preview of the selected item on the right">
+  <img src="docs/panel.png" width="612" alt="Clipt's panel: a search field, pinned and recent items on the left, a preview of the selected item on the right">
 </p>
 
 ---

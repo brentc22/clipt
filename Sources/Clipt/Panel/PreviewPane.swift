@@ -1,7 +1,7 @@
 import SwiftUI
 import CliptCore
 
-/// The right side: the selected item in a rounded box, then From / Copied / Type.
+/// The right side: the selected item in a rounded box, then one line of metadata.
 struct PreviewPane: View {
     let content: PreviewContent?
     let meta: PreviewMeta?
@@ -9,18 +9,29 @@ struct PreviewPane: View {
     let itemID: Int64?
     let crossfade: Bool
 
+    /// Images are shown small: never taller than this.
+    private static let maxImageHeight: CGFloat = 150
+
     var body: some View {
         ZStack(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
                 box
-                if let meta { MetaGrid(meta: meta) }
+                if let meta {
+                    Text(meta.line)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        // The middle goes first, so the source and the size both stay.
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 2)
+                }
             }
             .id(itemID)
             .transition(.opacity)
         }
         // Overrides the selection's spring for this pane: a crossfade, or nothing on a held key.
         .animation(crossfade ? Motion.quick : nil, value: itemID)
-        .padding(16)
+        .padding(EdgeInsets(top: 8, leading: 4, bottom: 10, trailing: 10))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -30,41 +41,49 @@ struct PreviewPane: View {
             case .text(let text):
                 ScrollView {
                     Text(text)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.primary.opacity(0.85))
                         .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .padding(12)
+                        .padding(10)
                 }
                 .scrollIndicators(.automatic)
             case .image(let image):
+                // At most 150 pt tall and never past the original's size on a Retina screen,
+                // so the thumbnail and the sharper image that replaces it lay out the same.
+                let cap = meta?.pixelSize.map { CGSize(width: CGFloat($0.width) / 2, height: CGFloat($0.height) / 2) }
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
-                    .clipShape(.rect(cornerRadius: 6))
+                    .frame(maxWidth: cap?.width ?? .infinity,
+                           maxHeight: min(Self.maxImageHeight, cap?.height ?? .infinity))
+                    .clipShape(.rect(cornerRadius: 4, style: .continuous))
+                    .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
                     .padding(10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .color(let color, let hex):
-                VStack(spacing: 10) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                VStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(Color(nsColor: color))
-                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
+                        .frame(width: 64, height: 64)
                     Text(hex.uppercased())
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
-                .padding(14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .files(let urls):
                 FileList(urls: urls)
             case nil:
                 Image(systemName: "list.clipboard")
-                    .font(.system(size: 28, weight: .light))
+                    .font(.system(size: 22, weight: .light))
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.background.opacity(0.5), in: .rect(cornerRadius: 12, style: .continuous))
+        .background(.primary.opacity(0.06), in: .rect(cornerRadius: 9, style: .continuous))
     }
 }
 
@@ -73,46 +92,26 @@ private struct FileList: View {
     private let shown = 7
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             ForEach(Array(urls.prefix(shown).enumerated()), id: \.offset) { _, url in
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
                         .resizable()
-                        .frame(width: 20, height: 20)
+                        .frame(width: 16, height: 16)
                     Text(url.lastPathComponent)
-                        .font(.system(size: 12))
+                        .font(.system(size: 11))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
             }
             if urls.count > shown {
                 Text("and \(urls.count - shown) more")
-                    .font(.system(size: 11))
+                    .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(12)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-}
-
-private struct MetaGrid: View {
-    let meta: PreviewMeta
-
-    var body: some View {
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
-            row("From", meta.source)
-            row("Copied", PanelFormat.relative(meta.copiedAt))
-            row("Type", meta.type)
-        }
-        .font(.system(size: 11))
-    }
-
-    private func row(_ label: String, _ value: String) -> some View {
-        GridRow {
-            Text(label).fontWeight(.medium).foregroundStyle(.tertiary)
-            Text(value).foregroundStyle(.secondary).lineLimit(1)
-        }
     }
 }
 
@@ -127,11 +126,21 @@ enum PreviewContent {
     case color(NSColor, String)
 }
 
-/// The From / Copied / Type grid under the preview.
+/// What the line under the preview says: "Safari · just now · 3024 × 1964 · 2.4 MB".
 struct PreviewMeta: Equatable {
     let source: String
     let copiedAt: Date
-    let type: String
+    let kind: ClipKind
+    let characters: Int?
+    let byteSize: Int
+    let fileCount: Int?
+    let pixelSize: PixelSize?
+
+    /// Formatted when drawn, so "just now" ages with the panel.
+    var line: String {
+        PanelFormat.metaLine(source: source, copiedAt: copiedAt, kind: kind, characters: characters,
+                             byteSize: byteSize, fileCount: fileCount, pixelSize: pixelSize)
+    }
 }
 
 /// Loads the preview for one item at a time; a newer `load` or `cancel` drops older results.
@@ -196,7 +205,8 @@ final class PreviewLoader {
                 guard isCurrent(),
                       let data = (reps.first { $0.type == PasteType.png } ?? reps.first { $0.type == PasteType.tiff })?.data
                 else { return }
-                let cg = await Task.detached(priority: .userInitiated) { Thumbnails.downsample(data, maxPixel: 900) }.value
+                // 480 px covers the box (about 205 × 150 pt) at 2x; images are previewed small.
+                let cg = await Task.detached(priority: .userInitiated) { Thumbnails.downsample(data, maxPixel: 480) }.value
                 guard isCurrent(), let cg else { return }
                 content = .image(Self.image(cg))
                 apply(content, meta)
@@ -217,9 +227,8 @@ final class PreviewLoader {
     }
 
     private static func meta(_ item: ClipItem, characters: Int? = nil, files: Int? = nil) -> PreviewMeta {
-        PreviewMeta(source: item.sourceAppName ?? "Unknown app", copiedAt: item.copiedAt,
-                    type: PanelFormat.typeLine(kind: item.kind, characters: characters,
-                                               byteSize: item.byteSize, fileCount: files))
+        PreviewMeta(source: item.sourceAppName ?? "Unknown app", copiedAt: item.copiedAt, kind: item.kind,
+                    characters: characters, byteSize: item.byteSize, fileCount: files, pixelSize: item.pixelSize)
     }
 
     private static func image(_ cg: CGImage) -> NSImage {

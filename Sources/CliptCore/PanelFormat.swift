@@ -27,22 +27,36 @@ public enum PanelFormat {
                         : date.formatted(base.day().month(.abbreviated).year())
     }
 
-    /// The "Type" line: "Link · 36 characters", "Image · 1.2 MB", "Files · 3 items".
-    /// `characters` is nil while the full text is still loading.
-    public static func typeLine(kind: ClipKind, characters: Int?, byteSize: Int, fileCount: Int? = nil) -> String {
+    /// "3024 × 1964": an image's pixel size, as an image row and the meta line show it.
+    public static func dimensions(_ size: PixelSize) -> String {
+        "\(size.width) \u{00D7} \(size.height)"
+    }
+
+    /// What a list row says: an image's pixel size when known, else the stored preview.
+    public static func rowText(kind: ClipKind, preview: String, pixelSize: PixelSize?) -> String {
+        if kind == .image, let pixelSize { return dimensions(pixelSize) }
+        return preview
+    }
+
+    /// The one line under the preview: where from, when, and what it is.
+    /// "Safari · just now · 3024 × 1964 · 2.4 MB", "Mail · 2 min ago · 1,204 characters",
+    /// "Finder · yesterday · 3 items". `characters` and `fileCount` are nil while loading.
+    public static func metaLine(source: String, copiedAt: Date, kind: ClipKind, characters: Int?, byteSize: Int,
+                                fileCount: Int? = nil, pixelSize: PixelSize? = nil, now: Date = Date(),
+                                calendar: Calendar = .current) -> String {
+        var parts = [source, relative(copiedAt, now: now, calendar: calendar)]
         switch kind {
         case .text, .link:
-            let name = kind == .link ? "Link" : "Text"
-            guard let characters else { return name }
-            return "\(name) · \(count(characters, "character"))"
+            if let characters { parts.append(count(characters, "character")) }
         case .color:
-            return "Color"
+            break
         case .image:
-            return "Image · " + Int64(byteSize).formatted(.byteCount(style: .file).locale(locale))
+            if let pixelSize { parts.append(dimensions(pixelSize)) }
+            parts.append(Int64(byteSize).formatted(.byteCount(style: .file).locale(locale)))
         case .file:
-            guard let fileCount, fileCount != 1 else { return "File" }
-            return "Files · \(count(fileCount, "item"))"
+            if let fileCount { parts.append(count(fileCount, "item")) }
         }
+        return parts.joined(separator: " · ")
     }
 
     /// "1 character", "1,204 characters".

@@ -1,7 +1,7 @@
 import SwiftUI
 import CliptCore
 
-/// The whole panel: search row, list | preview, footer, on one sheet of Liquid Glass.
+/// The whole panel: search row, then list | preview, on one sheet of Liquid Glass.
 struct PanelView: View {
     @ObservedObject var model: PanelModel
     @FocusState private var searchFocused: Bool
@@ -9,31 +9,31 @@ struct PanelView: View {
 
     private static let topID = "panel-top"
     private static let highlightID = "selection-highlight"
-    private static let rowHeight: CGFloat = 30
+    /// One list row; ClipRow and the insert/remove transition both use it.
+    static let rowHeight: CGFloat = 24
+    /// The list's inset from the panel edges and the search row.
+    private static let listPadding: CGFloat = 5
 
     var body: some View {
         GlassEffectContainer {
             VStack(spacing: 0) {
                 SearchRow(query: $model.query, filter: $model.filter, focused: $searchFocused)
-                Divider().opacity(0.6)
+                Rectangle().fill(.primary.opacity(0.1)).frame(height: 0.5)
                 HStack(spacing: 0) {
                     VStack(spacing: 0) {
                         if model.captureState != .active { banner }
                         list
                     }
-                    .frame(width: PanelPlacement.size.width * 0.52)
-                    Divider().opacity(0.5)
+                    .frame(width: PanelPlacement.size.width * 0.56)
                     // A held ↓ swaps the preview outright (a crossfade per repeat would only stack up),
                     // and so does the first fill while the panel opens.
                     PreviewPane(content: model.preview, meta: model.meta, itemID: model.list.selection,
                                 crossfade: model.selectionCause != .keyRepeat && model.isSettledOpen)
                 }
                 .frame(maxHeight: .infinity)
-                Divider().opacity(0.6)
-                FooterBar()
             }
             .frame(width: PanelPlacement.size.width, height: PanelPlacement.size.height)
-            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            .glassEffect(.regular, in: .rect(cornerRadius: 18))
         }
         .onKeyPress(phases: [.down, .repeat], action: handle)
         .onChange(of: model.focusRequest, initial: true) { searchFocused = true }
@@ -46,15 +46,15 @@ struct PanelView: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    Color.clear.frame(height: 6).id(Self.topID)
+                    Color.clear.frame(height: Self.listPadding).id(Self.topID)
                     let showHeaders = !model.list.pinned.isEmpty
                     if showHeaders { SectionHeader(title: "Pinned").transition(.opacity) }
                     rows(model.list.pinned, style: style)
                     if showHeaders { SectionHeader(title: "Recent").transition(.opacity) }
                     rows(model.list.recent, style: style)
-                    Color.clear.frame(height: 6)
+                    Color.clear.frame(height: Self.listPadding)
                 }
-                .padding(.horizontal, 6)
+                .padding(.horizontal, Self.listPadding)
             }
             .scrollIndicators(.automatic)
             .overlay { if model.hasLoaded && model.list.rows.isEmpty { emptyState } }
@@ -107,12 +107,12 @@ struct PanelView: View {
 
     private var emptyState: some View {
         Text(model.isSearching ? "No matches" : "Nothing copied yet")
-            .font(.system(size: 13))
+            .font(.system(size: 12))
             .foregroundStyle(.secondary)
     }
 
     @ViewBuilder private var banner: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: model.captureState == .pausedByUser ? "pause.circle.fill" : "exclamationmark.triangle.fill")
                 .foregroundStyle(model.captureState == .pausedByUser ? Color.secondary : Color.orange)
             if model.captureState == .pausedByUser {
@@ -120,7 +120,7 @@ struct PanelView: View {
                 Spacer(minLength: 4)
                 Button("Resume") { model.resumeCapture() }
                     .buttonStyle(.glass)
-                    .controlSize(.small)
+                    .controlSize(.mini)
                     .focusable(false)
             } else {
                 Text("Clipt can't see new copies — allow it in Privacy & Security → Paste from Other Apps")
@@ -128,11 +128,11 @@ struct PanelView: View {
                 Spacer(minLength: 0)
             }
         }
-        .font(.system(size: 11))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(.primary.opacity(0.06), in: .rect(cornerRadius: 9, style: .continuous))
-        .padding([.horizontal, .top], 6)
+        .font(.system(size: 10.5))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.primary.opacity(0.06), in: .rect(cornerRadius: 7, style: .continuous))
+        .padding([.horizontal, .top], Self.listPadding)
     }
 
     // MARK: Keys
