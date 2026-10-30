@@ -10,6 +10,8 @@ macOS 26.
   <kbd>⌘1</kbd>–<kbd>⌘9</kbd> paste a visible row directly.
 - **Captures** text (rich text stays rich), images, files, links and colors, with the app
   they came from. Copying something already in history moves it to the top.
+- **Compact by design.** A 540 × 330 pt panel with dense rows; photos show as a small
+  thumbnail with their pixel size, and the preview keeps them small.
 - **Search** across the whole history, including text inside images (read on-device), with
   All / Text / Images / Links filters.
 - **Pins** that never expire, plain-text paste (<kbd>⌥↩</kbd>), delete, and a preview pane.
