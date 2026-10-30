@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import ServiceManagement
 import SwiftUI
 
 /// The three-step welcome window: one titled window, reused while open.
@@ -18,7 +19,8 @@ enum Onboarding {
             let host = NSHostingController(rootView: OnboardingView(model: model))
             let w = NSWindow(contentViewController: host)
             w.title = "Welcome to Clipt"
-            w.styleMask = [.titled, .closable]
+            w.styleMask = [.titled, .closable, .fullSizeContentView]
+            w.titlebarAppearsTransparent = true
             w.isReleasedWhenClosed = false
             w.delegate = closer
             w.setContentSize(NSSize(width: 520, height: 420))
@@ -52,9 +54,16 @@ final class OnboardingModel: ObservableObject {
     @Published var step = 0
     @Published var accessibility = Permissions.accessibilityGranted
     @Published var pasteboard = Permissions.pasteboardAllowed
-    @Published var launchAtLogin = true
+    @Published var launchAtLogin: Bool
     /// Reuses the shortcut and launch-at-login handling from Settings.
     let settings = SettingsModel()
+
+    init() {
+        // On by default for a first run; if login launch is already on, show the real state.
+        settings.refreshLaunchAtLogin()
+        launchAtLogin = SMAppService.mainApp.status == .notRegistered || SMAppService.mainApp.status == .notFound
+            ? true : settings.launchAtLogin
+    }
     private var timer: Timer?
 
     func goTo(_ step: Int) { self.step = min(max(step, 0), Self.stepCount - 1) }
@@ -83,7 +92,12 @@ final class OnboardingModel: ObservableObject {
     }
 
     func finish() {
-        if launchAtLogin { settings.setLaunchAtLogin(true) }
+        settings.refreshLaunchAtLogin()
+        if launchAtLogin != settings.launchAtLogin {
+            settings.setLaunchAtLogin(launchAtLogin)
+            // The window is about to close, so a failure has to surface elsewhere.
+            if let note = settings.launchNote { Toast.show(note, symbol: "exclamationmark.triangle") }
+        }
         Onboarding.close()
     }
 
@@ -129,6 +143,7 @@ struct OnboardingView: View {
             .padding(20)
         }
         .frame(width: 520, height: 420)
+        .background { Rectangle().fill(.clear).glassEffect(.regular, in: .rect(cornerRadius: 0)).ignoresSafeArea() }
     }
 
     // MARK: Steps
