@@ -49,14 +49,11 @@ final class PasteboardMonitor {
         history?.setCaptureState(new)
     }
 
-    /// `.default` counts as allowed: it is what the system reports when the privacy
-    /// feature is off. Only an explicit ask/deny blocks.
+    /// `.default` means the user has not decided yet: macOS will ask on Clipt's first
+    /// programmatic read, and only after that alert is Clipt listed in "Paste from Other
+    /// Apps". Capture still runs (see `PasteboardAccess.capturesAllowed`).
     static func allows(_ behavior: NSPasteboard.AccessBehavior) -> Bool {
-        switch behavior {
-        case .alwaysAllow, .default: true
-        case .ask, .alwaysDeny: false
-        @unknown default: false
-        }
+        PasteboardAccess.capturesAllowed(PasteboardBehavior(behavior))
     }
 
     private func tick() {
@@ -134,5 +131,17 @@ final class PasteboardMonitor {
         }
         guard pasteboard.changeCount == count, !reps.isEmpty else { return nil }
         return reps
+    }
+}
+
+extension PasteboardBehavior {
+    init(_ behavior: NSPasteboard.AccessBehavior) {
+        switch behavior {
+        case .default: self = .notDecided
+        case .ask: self = .ask
+        case .alwaysAllow: self = .alwaysAllow
+        case .alwaysDeny: self = .alwaysDeny
+        @unknown default: self = .unknown
+        }
     }
 }

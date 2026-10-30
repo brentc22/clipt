@@ -53,7 +53,9 @@ final class OnboardingModel: ObservableObject {
 
     @Published var step = 0
     @Published var accessibility = Permissions.accessibilityGranted
-    @Published var pasteboard = Permissions.pasteboardAllowed
+    @Published var pasteboard = Permissions.pasteboardStatus
+    /// "Ask macOS now" is waiting on the system alert.
+    @Published var askingPasteboard = false
     @Published var launchAtLogin: Bool
     /// Reuses the shortcut and launch-at-login handling from Settings.
     let settings = SettingsModel()
@@ -86,9 +88,18 @@ final class OnboardingModel: ObservableObject {
     func refresh() {
         let a = Permissions.accessibilityGranted
         if a != accessibility { accessibility = a }
-        let p = Permissions.pasteboardAllowed
+        let p = Permissions.pasteboardStatus
         if p != pasteboard { pasteboard = p }
         History.shared.refreshCaptureState()   // lifts the paused banner as soon as access is allowed
+    }
+
+    func askForPasteboardAccess() {
+        guard !askingPasteboard else { return }
+        askingPasteboard = true
+        Permissions.askForPasteboardAccess { [weak self] in
+            self?.askingPasteboard = false
+            self?.refresh()
+        }
     }
 
     func finish() {
@@ -158,18 +169,38 @@ struct OnboardingView: View {
 
     private var pasteboardStep: some View {
         stepLayout(symbol: "doc.on.clipboard", title: "Let Clipt see what you copy",
-                   body: "Open System Settings → Privacy & Security → Paste from Other Apps, find Clipt and choose Allow.") {
+                   body: "macOS asks once whether Clipt may read what you copy. Choose Allow, or set it later in System Settings.") {
             VStack(alignment: .leading, spacing: 4) {
                 Text("1. Open System Settings")
                 Text("2. Go to Privacy & Security → Paste from Other Apps")
-                Text("3. Find Clipt and choose Allow")
+                Text("3. Find Clipt and choose Allow (it is listed once macOS has asked)")
             }
             .font(.callout).foregroundStyle(.secondary)
-            Button("Open System Settings") {
-                // There is no deep link to this setting, so open the app's root.
-                NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
+            HStack {
+                if model.pasteboard == .notDecided {
+                    Button("Ask macOS now") { model.askForPasteboardAccess() }
+                        .disabled(model.askingPasteboard)
+                }
+                Button("Open System Settings") {
+                    // There is no deep link to this setting, so open the app's root.
+                    NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
+                }
             }
-            status(model.pasteboard, on: "Clipt can see what you copy", off: "Not allowed yet — Clipt is not saving new copies")
+            pasteboardStatus
+        }
+    }
+
+    /// Green only for an explicit Allow.
+    @ViewBuilder private var pasteboardStatus: some View {
+        switch model.pasteboard {
+        case .allowed:
+            status(true, on: "Clipt can see what you copy", off: "")
+        case .notDecided:
+            Label("Not decided yet — macOS asks once, the first time Clipt reads a copy", systemImage: "questionmark.circle")
+                .foregroundStyle(Color.orange)
+                .font(.callout)
+        case .denied:
+            status(false, on: "", off: "Not allowed — Clipt is not saving new copies")
         }
     }
 

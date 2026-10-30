@@ -108,10 +108,12 @@ Clipt asks for two things on first launch and walks you through them:
 - **Accessibility** (System Settings → Privacy & Security → Accessibility), so it can
   press <kbd>⌘V</kbd> for you. Without it, Clipt still copies the item and tells you to
   press <kbd>⌘V</kbd> yourself.
-- **Paste from Other Apps** set to **Allow** (System Settings → Privacy & Security →
-  Paste from Other Apps). While it is on "Ask" or "Don't Allow", Clipt pauses capture
-  instead of triggering a system prompt on every copy, and says so in the menu bar icon
-  and the panel.
+- **Paste from Other Apps** (System Settings → Privacy & Security → Paste from Other
+  Apps). macOS shows a one-time alert the first time Clipt reads something you copied;
+  choose **Allow**. Onboarding has an **Ask macOS now** button to get that alert out of
+  the way up front. Clipt only appears in the Paste from Other Apps list after that first
+  alert. If the setting is "Ask" or "Don't Allow", Clipt pauses capture rather than
+  raising an alert on every copy, and says so in the menu bar icon and the panel.
 
 ### Updates
 
